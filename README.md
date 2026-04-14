@@ -119,9 +119,6 @@ server:
   grpc_port: 9090
   http_port: 8080
 
-redis:
-  addr: "localhost:6379"
-
 worker:
   pool_size: 10
   poll_interval: 500ms
@@ -135,7 +132,7 @@ saga:
 
 Environment variables:
 ```
-PG_CONN=postgres://scipio:scipio@postgres:5432/scipio
+PG_CONN=postgresql://scipio:scipio@postgres:5432/scipio
 REDIS_CONN=redis://scipio:scipio@redis:6380/1
 ```
 
@@ -144,8 +141,8 @@ REDIS_CONN=redis://scipio:scipio@redis:6380/1
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/sagas` | listent sagas, filter by `?status=` |
-| GET | `/sagas/:id` | Full saga state with step history |
-| POST | `/sagas/:id/cancel` | Trigger compensation |
+| GET | `/sagas/<id>` | Full saga state with step history |
+| POST | `/sagas/<id>/cancel` | Trigger compensation |
 
 ## Testing
 
