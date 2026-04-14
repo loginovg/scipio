@@ -1,0 +1,66 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+
+  ut:
+    name: ut
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: run unit tests
+        run: make tests
+
+  testsuite:
+    name: testsuite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: install test dependencies
+        run: python3 -m pip install pytest
+      - name: start dependencies
+        run: |
+          if [ -s docker-compose.yaml ]; then
+            docker compose -f docker-compose.yaml up -d
+          elif [ -s docker-compose.yml ]; then
+            docker compose -f docker-compose.yml up -d
+          else
+            echo "no non-empty docker compose file, skipping dependency startup"
+          fi
+      - name: run functional tests
+        run: make testsuite
+      - name: stop dependencies
+        if: always()
+        run: |
+          if [ -s docker-compose.yaml ]; then
+            docker compose -f docker-compose.yaml down -v
+          elif [ -s docker-compose.yml ]; then
+            docker compose -f docker-compose.yml down -v
+          else
+            echo "no non-empty docker compose file, skipping dependency shutdown"
+          fi
