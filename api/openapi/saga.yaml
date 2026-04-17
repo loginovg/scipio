@@ -1,0 +1,267 @@
+openapi: 3.0.3
+info:
+  title: Scipio Saga API
+  version: 1.0.0
+
+paths:
+  /healthz:
+    get:
+      operationId: healthz
+      responses:
+        "200":
+          description: Service health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /sagas:
+    post:
+      operationId: startSaga
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartSagaRequest"
+      responses:
+        "202":
+          description: Saga creation accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StartSagaResponse"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    get:
+      operationId: listSagas
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/SagaStatus"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: Sagas list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListSagasResponse"
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /sagas/{id}:
+    get:
+      operationId: getSaga
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Saga details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Saga"
+        "404":
+          description: Saga not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /sagas/{id}/cancel:
+    post:
+      operationId: cancelSaga
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "202":
+          description: Cancellation accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelSagaResponse"
+        "404":
+          description: Saga not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+      properties:
+        status:
+          type: string
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - error
+      properties:
+        error:
+          type: string
+    StartSagaRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - workflow
+      properties:
+        workflow:
+          type: string
+        context:
+          type: object
+          additionalProperties: true
+    StartSagaResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+      properties:
+        id:
+          type: string
+    ListSagasResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - sagas
+      properties:
+        sagas:
+          type: array
+          items:
+            $ref: "#/components/schemas/Saga"
+    CancelSagaResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - saga
+      properties:
+        saga:
+          $ref: "#/components/schemas/Saga"
+    Saga:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - workflow
+        - status
+        - context
+        - steps
+      properties:
+        id:
+          type: string
+        workflow:
+          type: string
+        status:
+          $ref: "#/components/schemas/SagaStatus"
+        context:
+          type: object
+          additionalProperties: true
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/SagaStep"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    SagaStep:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - status
+        - attempt
+      properties:
+        name:
+          type: string
+        status:
+          $ref: "#/components/schemas/SagaStepStatus"
+        attempt:
+          type: integer
+          minimum: 0
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        error:
+          type: string
+    SagaStatus:
+      type: string
+      enum:
+        - CREATED
+        - RUNNING
+        - COMPLETED
+        - CANCELING
+        - COMPENSATED
+        - FAILED
+    SagaStepStatus:
+      type: string
+      enum:
+        - PENDING
+        - RUNNING
+        - COMPLETED
+        - COMPENSATING
+        - COMPENSATED
+        - FAILED
