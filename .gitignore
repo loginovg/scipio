@@ -1,1 +1,8 @@
 .vscode/
+.bin/
+.cache/
+__pycache__/
+.pytest_cache/
+*.pyc
+.testsuite-venv/
+gen/

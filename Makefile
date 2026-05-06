@@ -1,12 +1,79 @@
-.PHONY: lint tests testsuite ci
+.PHONY: lint lint-code tests testsuite testsuite-deps run codegen tools clean-gen ci
+
+TOOLS_BIN := $(CURDIR)/.bin
+GO_CACHE ?= $(CURDIR)/.cache/go-build
+GOLANGCI_LINT_CACHE_DIR ?= $(CURDIR)/.cache/golangci-lint
+TESTSUITE_VENV ?= $(CURDIR)/.testsuite-venv
+TESTSUITE_PYTHON := $(TESTSUITE_VENV)/bin/python
+PROTOC_GEN_GO_VERSION ?= v1.36.11
+PROTOC_GEN_GO_GRPC_VERSION ?= v1.6.2
+OAPI_CODEGEN_VERSION ?= v2.7.0
+SQLC_VERSION ?= v1.30.0
+PROTOC_GEN_GO := $(TOOLS_BIN)/protoc-gen-go
+PROTOC_GEN_GO_GRPC := $(TOOLS_BIN)/protoc-gen-go-grpc
+OAPI_CODEGEN := $(TOOLS_BIN)/oapi-codegen
+SQLC := $(TOOLS_BIN)/sqlc
+
+PROTO_SRC_DIR := api/proto
+PROTO_FILE := saga.proto
+PROTO_OUT_DIR := gen/proto
+OPENAPI_FILE := api/openapi/saga.yaml
+OPENAPI_CONFIG := api/openapi/oapi-codegen.yaml
+OPENAPI_OUT_DIR := gen/openapi
 
 lint:
-	golangci-lint run ./...
+	mkdir -p $(GO_CACHE) $(GOLANGCI_LINT_CACHE_DIR)
+	GOCACHE=$(GO_CACHE) GOLANGCI_LINT_CACHE=$(GOLANGCI_LINT_CACHE_DIR) golangci-lint run ./...
 
 tests:
-	go test -count=1 -tags test_dep ./...
+	mkdir -p $(GO_CACHE)
+	GOCACHE=$(GO_CACHE) go test -count=1 -tags test_dep ./...
 
-testsuite:
-	python3 -m pytest testsuite
+testsuite-deps:
+	python3 -m venv $(TESTSUITE_VENV)
+	$(TESTSUITE_PYTHON) -m pip install -r testsuite/requirements.txt
+
+testsuite: testsuite-deps
+	$(TESTSUITE_PYTHON) -m pytest testsuite
+
+run:
+	go run ./cmd/scipio
+
+tools: $(PROTOC_GEN_GO) $(PROTOC_GEN_GO_GRPC) $(OAPI_CODEGEN) $(SQLC)
+
+$(PROTOC_GEN_GO):
+	mkdir -p $(TOOLS_BIN)
+	GOBIN=$(TOOLS_BIN) go install google.golang.org/protobuf/cmd/protoc-gen-go@$(PROTOC_GEN_GO_VERSION)
+
+$(PROTOC_GEN_GO_GRPC):
+	mkdir -p $(TOOLS_BIN)
+	GOBIN=$(TOOLS_BIN) go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@$(PROTOC_GEN_GO_GRPC_VERSION)
+
+$(OAPI_CODEGEN):
+	mkdir -p $(TOOLS_BIN)
+	GOBIN=$(TOOLS_BIN) go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@$(OAPI_CODEGEN_VERSION)
+
+$(SQLC):
+	mkdir -p $(TOOLS_BIN)
+	GOBIN=$(TOOLS_BIN) go install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION)
+
+codegen: tools clean-gen
+	mkdir -p $(PROTO_OUT_DIR) $(OPENAPI_OUT_DIR)
+	protoc \
+		--proto_path=$(PROTO_SRC_DIR) \
+		--plugin=protoc-gen-go=$(PROTOC_GEN_GO) \
+		--plugin=protoc-gen-go-grpc=$(PROTOC_GEN_GO_GRPC) \
+		--go_out=$(PROTO_OUT_DIR) \
+		--go_opt=paths=source_relative \
+		--go-grpc_out=$(PROTO_OUT_DIR) \
+		--go-grpc_opt=paths=source_relative \
+		--descriptor_set_out=$(PROTO_OUT_DIR)/saga.pb \
+		--include_imports \
+		$(PROTO_FILE)
+	$(OAPI_CODEGEN) --config $(OPENAPI_CONFIG) $(OPENAPI_FILE)
+	$(SQLC) generate
+
+clean-gen:
+	rm -f $(PROTO_OUT_DIR)/saga.pb.go $(PROTO_OUT_DIR)/saga_grpc.pb.go $(PROTO_OUT_DIR)/saga.pb $(OPENAPI_OUT_DIR)/saga.gen.go $(OPENAPI_OUT_DIR)/saga.openapi.yaml
 
 ci: lint tests testsuite
