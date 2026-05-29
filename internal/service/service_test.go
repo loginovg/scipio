@@ -221,7 +221,7 @@ func TestShouldReturnLockErrorWhenSagaLockAcquisitionFailsDuringCancel(t *testin
 	// given
 	lockErr := errors.New("lock unavailable")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := NewWithLock(store.NewMemory(), failingLocker{err: lockErr}, time.Second, logger)
+	svc := New(store.NewMemory(), failingLocker{err: lockErr}, time.Second, logger)
 
 	sagaID, err := svc.StartSaga(context.Background(), "order_flow", []byte(`{}`))
 	require.NoError(t, err)
@@ -244,7 +244,7 @@ func TestShouldReturnCompensationErrorWhenCompensationUpdateFailsDuringCancel(t 
 		failAtUpdate: 2,
 		err:          compensationErr,
 	}
-	svc := NewWithLock(storeWithFailedSecondUpdate, lock.NewNoop(), time.Second, logger)
+	svc := New(storeWithFailedSecondUpdate, lock.NewNoop(), time.Second, logger)
 
 	sagaID, err := svc.StartSaga(context.Background(), "order_flow", []byte(`{}`))
 	require.NoError(t, err)
@@ -261,7 +261,7 @@ func TestShouldReturnErrStoreNotConfiguredWhenStoreIsNil(t *testing.T) {
 
 	// given
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := NewWithLock(nil, lock.NewNoop(), time.Second, logger)
+	svc := New(nil, lock.NewNoop(), time.Second, logger)
 
 	// when
 	_, startErr := svc.StartSaga(context.Background(), "order_flow", []byte(`{}`))
@@ -290,7 +290,7 @@ func TestShouldReturnErrStoreNotConfiguredWhenStoreIsNil(t *testing.T) {
 
 func newTestService() *Service {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return New(store.NewMemory(), logger)
+	return New(store.NewMemory(), lock.NewNoop(), 5*time.Second, logger)
 }
 
 type failingLocker struct {

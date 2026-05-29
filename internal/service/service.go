@@ -39,11 +39,7 @@ type Service struct {
 	sagaLocker sagaLocker
 }
 
-func New(store sagaStore, logger *slog.Logger) *Service {
-	return NewWithLock(store, lock.NewNoop(), 5*time.Second, logger)
-}
-
-func NewWithLock(store sagaStore, locker lock.Locker, lockTTL time.Duration, logger *slog.Logger) *Service {
+func New(store sagaStore, locker lock.Locker, lockTTL time.Duration, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.Default()
 	}

@@ -20,7 +20,7 @@ func TestShouldCompleteSagaWhenRunnerDrainsPendingStep(t *testing.T) {
 	// given
 	queueStore := newMemoryStepQueueStore()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := NewWithLock(queueStore, lock.NewNoop(), time.Second, logger)
+	svc := New(queueStore, lock.NewNoop(), time.Second, logger)
 
 	sagaID, err := svc.StartSaga(context.Background(), "order_flow", []byte(`{"amount": 42}`))
 	require.NoError(t, err)

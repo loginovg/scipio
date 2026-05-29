@@ -71,7 +71,7 @@ func main() {
 		}
 	}()
 
-	sagaService := service.NewWithLock(postgresStore, redisLocker, cfg.LockTTL, logger)
+	sagaService := service.New(postgresStore, redisLocker, cfg.LockTTL, logger)
 	stepRunner := service.NewStepRunner(
 		postgresStore,
 		redisLocker,
