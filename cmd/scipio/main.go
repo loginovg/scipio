@@ -83,6 +83,7 @@ func main() {
 		cfg.StepWorkers,
 		cfg.StepPollInterval,
 		cfg.StepStaleTimeout,
+		nil,
 		logger,
 	)
 

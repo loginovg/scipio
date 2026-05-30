@@ -259,9 +259,9 @@ func fetchSteps(ctx context.Context, reader stepReader, sagaID string) ([]domain
 }
 
 func mapSagaRow(row storesqlc.Saga) (domain.Saga, error) {
-	status, statusErr := parseSagaStatus(row.Status)
+	status, statusErr := domain.ParseSagaStatus(row.Status)
 	if statusErr != nil {
-		return domain.Saga{}, statusErr
+		return domain.Saga{}, fmt.Errorf("unsupported saga status %q", row.Status)
 	}
 
 	sagaContext, contextErr := parseContext(row.Context)
@@ -282,13 +282,14 @@ func mapSagaRow(row storesqlc.Saga) (domain.Saga, error) {
 func mapStepRows(rows []storesqlc.GetSagaStepsRow) ([]domain.SagaStep, error) {
 	steps := make([]domain.SagaStep, 0, len(rows))
 	for _, row := range rows {
-		status, statusErr := parseStepStatus(row.Status)
+		status, statusErr := domain.ParseSagaStepStatus(row.Status)
 		if statusErr != nil {
-			return nil, statusErr
+			return nil, fmt.Errorf("unsupported saga step status %q", row.Status)
 		}
 
 		steps = append(steps, domain.SagaStep{
 			Name:       row.Name,
+			GRPCTarget: row.GrpcTarget,
 			Status:     status,
 			Attempt:    uint32(row.Attempt),
 			StartedAt:  toTimePtr(row.StartedAt),
@@ -303,13 +304,14 @@ func mapStepRows(rows []storesqlc.GetSagaStepsRow) ([]domain.SagaStep, error) {
 func mapStepRowsForUpdate(rows []storesqlc.GetSagaStepsForUpdateRow) ([]domain.SagaStep, error) {
 	steps := make([]domain.SagaStep, 0, len(rows))
 	for _, row := range rows {
-		status, statusErr := parseStepStatus(row.Status)
+		status, statusErr := domain.ParseSagaStepStatus(row.Status)
 		if statusErr != nil {
-			return nil, statusErr
+			return nil, fmt.Errorf("unsupported saga step status %q", row.Status)
 		}
 
 		steps = append(steps, domain.SagaStep{
 			Name:       row.Name,
+			GRPCTarget: row.GrpcTarget,
 			Status:     status,
 			Attempt:    uint32(row.Attempt),
 			StartedAt:  toTimePtr(row.StartedAt),
@@ -331,6 +333,7 @@ func replaceSteps(ctx context.Context, writer stepWriter, sagaID string, steps [
 			SagaID:     sagaID,
 			StepIndex:  int32(index),
 			Name:       step.Name,
+			GrpcTarget: step.GRPCTarget,
 			Status:     string(step.Status),
 			Attempt:    int32(step.Attempt),
 			StartedAt:  toNullablePGTime(step.StartedAt),
@@ -363,36 +366,6 @@ func parseContext(rawContext []byte) (map[string]any, error) {
 	}
 
 	return parsed, nil
-}
-
-func parseSagaStatus(rawStatus string) (domain.SagaStatus, error) {
-	status := domain.SagaStatus(strings.ToUpper(strings.TrimSpace(rawStatus)))
-	switch status {
-	case domain.SagaStatusCreated,
-		domain.SagaStatusRunning,
-		domain.SagaStatusCompleted,
-		domain.SagaStatusCanceling,
-		domain.SagaStatusCompensated,
-		domain.SagaStatusFailed:
-		return status, nil
-	default:
-		return "", fmt.Errorf("unsupported saga status %q", rawStatus)
-	}
-}
-
-func parseStepStatus(rawStatus string) (domain.SagaStepStatus, error) {
-	status := domain.SagaStepStatus(strings.ToUpper(strings.TrimSpace(rawStatus)))
-	switch status {
-	case domain.SagaStepStatusPending,
-		domain.SagaStepStatusRunning,
-		domain.SagaStepStatusCompleted,
-		domain.SagaStepStatusCompensating,
-		domain.SagaStepStatusCompensated,
-		domain.SagaStepStatusFailed:
-		return status, nil
-	default:
-		return "", fmt.Errorf("unsupported saga step status %q", rawStatus)
-	}
 }
 
 func isUniqueViolation(err error) bool {

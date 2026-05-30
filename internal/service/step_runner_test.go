@@ -2,8 +2,11 @@ package service
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,12 +23,18 @@ func TestShouldCompleteSagaWhenRunnerDrainsPendingStep(t *testing.T) {
 	// given
 	queueStore := newMemoryStepQueueStore()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dispatcher := &capturingStepDispatcher{}
 	svc := New(queueStore, lock.NewNoop(), time.Second, logger)
 
-	sagaID, err := svc.StartSaga(context.Background(), "order_flow", []byte(`{"amount": 42}`))
+	sagaID, err := svc.StartSaga(
+		context.Background(),
+		"order_flow",
+		[]byte(`{"amount": 42}`),
+		[]StartSagaStep{{Name: "order_flow", GRPCTarget: "billing:9000"}},
+	)
 	require.NoError(t, err)
 
-	runner := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 2, time.Millisecond, time.Second, logger)
+	runner := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 2, time.Millisecond, time.Second, dispatcher, logger)
 	runnerCtx, cancel := context.WithCancel(context.Background())
 	runnerDone := make(chan struct{})
 	runnerErr := make(chan error, 1)
@@ -65,17 +74,24 @@ func TestShouldRecoverRunningStepWhenRunnerDetectsStaleExecution(t *testing.T) {
 	now := time.Now().UTC()
 	startedAt := now.Add(-time.Minute)
 	createErr := queueStore.Create(context.Background(), domain.Saga{
-		ID:        "saga-stale-step",
-		Workflow:  "recover_flow",
-		Status:    domain.SagaStatusRunning,
-		Context:   map[string]any{},
-		Steps:     []domain.SagaStep{{Name: "recover_flow", Status: domain.SagaStepStatusRunning, Attempt: 1, StartedAt: &startedAt}},
+		ID:       "saga-stale-step",
+		Workflow: "recover_flow",
+		Status:   domain.SagaStatusRunning,
+		Context:  map[string]any{},
+		Steps: []domain.SagaStep{{
+			Name:       "recover_flow",
+			GRPCTarget: "billing:9000",
+			Status:     domain.SagaStepStatusRunning,
+			Attempt:    1,
+			StartedAt:  &startedAt,
+		}},
 		CreatedAt: now,
 		UpdatedAt: now.Add(-time.Minute),
 	})
 	require.NoError(t, createErr)
 
-	runner := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Millisecond, logger)
+	dispatcher := &capturingStepDispatcher{}
+	runner := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Millisecond, dispatcher, logger)
 	runnerCtx, cancel := context.WithCancel(context.Background())
 	runnerDone := make(chan struct{})
 	runnerErr := make(chan error, 1)
@@ -106,12 +122,119 @@ func TestShouldRecoverRunningStepWhenRunnerDetectsStaleExecution(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond)
 }
 
+func TestShouldDispatchSagaContextWhenRunnerExecutesConfiguredStep(t *testing.T) {
+	t.Parallel()
+
+	queueStore := newMemoryStepQueueStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dispatcher := &capturingStepDispatcher{}
+	svc := New(queueStore, lock.NewNoop(), time.Second, logger)
+
+	sagaID, err := svc.StartSaga(
+		context.Background(),
+		"order_flow",
+		[]byte(`{"amount": 42, "currency": "USD"}`),
+		[]StartSagaStep{{Name: "charge", GRPCTarget: "billing:9000"}},
+	)
+	require.NoError(t, err)
+
+	runner := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, dispatcher, logger)
+	runnerCtx, cancel := context.WithCancel(context.Background())
+	runnerDone := make(chan struct{})
+	runnerErr := make(chan error, 1)
+	go func() {
+		defer close(runnerDone)
+		runnerErr <- runner.Run(runnerCtx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-runnerDone
+		require.NoError(t, <-runnerErr)
+	})
+
+	require.Eventually(t, func() bool {
+		saga, getErr := svc.GetSaga(context.Background(), sagaID)
+		if getErr != nil {
+			return false
+		}
+		if saga.Status != domain.SagaStatusCompleted {
+			return false
+		}
+
+		calls := dispatcher.callsSnapshot()
+		if len(calls) != 1 {
+			return false
+		}
+
+		call := calls[0]
+		amount, ok := call.Saga.Context["amount"].(float64)
+		if !ok || amount != 42 {
+			return false
+		}
+
+		currency, ok := call.Saga.Context["currency"].(string)
+		if !ok || currency != "USD" {
+			return false
+		}
+
+		return call.Saga.ID == sagaID && call.Step.Name == "charge" && call.Step.GRPCTarget == "billing:9000"
+	}, 2*time.Second, 20*time.Millisecond)
+}
+
+func TestShouldFailSagaWhenStepDispatchReturnsError(t *testing.T) {
+	t.Parallel()
+
+	queueStore := newMemoryStepQueueStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dispatcher := &capturingStepDispatcher{err: errors.New("participant unavailable")}
+	svc := New(queueStore, lock.NewNoop(), time.Second, logger)
+
+	sagaID, err := svc.StartSaga(
+		context.Background(),
+		"order_flow",
+		[]byte(`{"amount": 42}`),
+		[]StartSagaStep{{Name: "charge", GRPCTarget: "billing:9000"}},
+	)
+	require.NoError(t, err)
+
+	runner := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, dispatcher, logger)
+	runnerCtx, cancel := context.WithCancel(context.Background())
+	runnerDone := make(chan struct{})
+	runnerErr := make(chan error, 1)
+	go func() {
+		defer close(runnerDone)
+		runnerErr <- runner.Run(runnerCtx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-runnerDone
+		require.NoError(t, <-runnerErr)
+	})
+
+	require.Eventually(t, func() bool {
+		saga, getErr := svc.GetSaga(context.Background(), sagaID)
+		if getErr != nil {
+			return false
+		}
+		if saga.Status != domain.SagaStatusFailed || len(saga.Steps) != 1 {
+			return false
+		}
+
+		step := saga.Steps[0]
+		if step.Status != domain.SagaStepStatusFailed {
+			return false
+		}
+
+		return strings.Contains(step.Error, "participant unavailable")
+	}, 2*time.Second, 20*time.Millisecond)
+}
+
 func TestShouldReturnErrStoreNotConfiguredWhenStepRunnerStoreIsNil(t *testing.T) {
 	t.Parallel()
 
 	// given
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	runner := NewStepRunner(nil, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, logger)
+	runner := NewStepRunner(nil, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, nil, logger)
 
 	// when
 	err := runner.Run(context.Background())
@@ -156,6 +279,10 @@ func (m *memoryStepQueueStore) ClaimNextStep(ctx context.Context, staleAfter tim
 		}
 
 		for index, step := range saga.Steps {
+			if !areAllPreviousStepsCompleted(saga.Steps, index) {
+				continue
+			}
+
 			isPending := step.Status == domain.SagaStepStatusPending
 			isRunningAndStale := step.Status == domain.SagaStepStatusRunning &&
 				staleAfter > 0 &&
@@ -199,4 +326,46 @@ func (m *memoryStepQueueStore) ClaimNextStep(ctx context.Context, staleAfter tim
 	}
 
 	return domain.ClaimedSagaStep{}, false, nil
+}
+
+func areAllPreviousStepsCompleted(steps []domain.SagaStep, currentIndex int) bool {
+	for index := 0; index < currentIndex; index++ {
+		if steps[index].Status != domain.SagaStepStatusCompleted {
+			return false
+		}
+	}
+
+	return true
+}
+
+type dispatchCall struct {
+	Saga domain.Saga
+	Step domain.SagaStep
+}
+
+type capturingStepDispatcher struct {
+	mu    sync.Mutex
+	calls []dispatchCall
+	err   error
+}
+
+func (d *capturingStepDispatcher) Dispatch(_ context.Context, saga domain.Saga, step domain.SagaStep) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.calls = append(d.calls, dispatchCall{
+		Saga: saga,
+		Step: step,
+	})
+
+	return d.err
+}
+
+func (d *capturingStepDispatcher) callsSnapshot() []dispatchCall {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	copied := make([]dispatchCall, len(d.calls))
+	copy(copied, d.calls)
+	return copied
 }

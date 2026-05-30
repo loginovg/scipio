@@ -15,6 +15,11 @@ type Client struct {
 	sagaClient sagav1.SagaServiceClient
 }
 
+type StartSagaStep struct {
+	Name       string
+	GRPCTarget string
+}
+
 func NewClient(address string) (*Client, error) {
 	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -31,7 +36,7 @@ func (c *Client) Close() error {
 	return c.conn.Close()
 }
 
-func (c *Client) StartSaga(ctx context.Context, workflow string, sagaContext map[string]any) (string, error) {
+func (c *Client) StartSaga(ctx context.Context, workflow string, sagaContext map[string]any, steps []StartSagaStep) (string, error) {
 	if sagaContext == nil {
 		sagaContext = map[string]any{}
 	}
@@ -41,9 +46,18 @@ func (c *Client) StartSaga(ctx context.Context, workflow string, sagaContext map
 		return "", err
 	}
 
+	mappedSteps := make([]*sagav1.StartSagaStep, 0, len(steps))
+	for _, step := range steps {
+		mappedSteps = append(mappedSteps, &sagav1.StartSagaStep{
+			Name:       step.Name,
+			GrpcTarget: step.GRPCTarget,
+		})
+	}
+
 	response, err := c.sagaClient.StartSaga(ctx, &sagav1.StartSagaRequest{
 		Workflow: workflow,
 		Context:  payload,
+		Steps:    mappedSteps,
 	})
 	if err != nil {
 		return "", err

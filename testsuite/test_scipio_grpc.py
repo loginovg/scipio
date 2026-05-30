@@ -37,6 +37,30 @@ def test_should_share_saga_state_between_instances_when_grpc_get_is_called_on_an
     assert saga.workflow == "grpc_shared_flow"
 
 
+def test_should_dispatch_context_to_step_executor_when_grpc_saga_is_started(
+    grpc_targets,
+    start_saga_grpc,
+    wait_for_status_grpc,
+    wait_for_step_dispatch,
+):
+    # given
+    first_target, second_target = grpc_targets
+    saga_context = {"tenant": "acme", "amount": 99, "flags": ["new"]}
+
+    # when
+    saga_id = start_saga_grpc(first_target, "grpc_dispatch_ctx_flow", saga_context)
+    saga = wait_for_status_grpc(second_target, saga_id, "SAGA_STATUS_COMPLETED")
+    calls = wait_for_step_dispatch(saga_id, expected_calls=1)
+
+    # then
+    assert saga.id == saga_id
+    assert len(calls) == 1
+    assert calls[0]["saga_id"] == saga_id
+    assert calls[0]["workflow"] == "grpc_dispatch_ctx_flow"
+    assert calls[0]["step_name"] == "grpc_dispatch_ctx_flow"
+    assert calls[0]["context"] == saga_context
+
+
 def test_should_return_compensated_saga_when_grpc_cancel_is_requested(
     grpc_targets,
     start_saga_grpc,

@@ -21,6 +21,13 @@ WITH candidate AS (
         ss.status = 'PENDING'
         OR (ss.status = 'RUNNING' AND ss.updated_at <= $1)
       )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM saga_steps prev
+        WHERE prev.saga_id = ss.saga_id
+          AND prev.step_index < ss.step_index
+          AND prev.status <> 'COMPLETED'
+      )
     ORDER BY ss.updated_at ASC, ss.id ASC
     FOR UPDATE OF ss SKIP LOCKED
     LIMIT 1
@@ -136,7 +143,7 @@ func (q *Queries) GetSagaForUpdate(ctx context.Context, id string) (Saga, error)
 }
 
 const getSagaSteps = `-- name: GetSagaSteps :many
-SELECT name, status, attempt, started_at, finished_at, error
+SELECT name, grpc_target, status, attempt, started_at, finished_at, error
 FROM saga_steps
 WHERE saga_id = $1
 ORDER BY step_index ASC
@@ -144,6 +151,7 @@ ORDER BY step_index ASC
 
 type GetSagaStepsRow struct {
 	Name       string
+	GrpcTarget string
 	Status     string
 	Attempt    int32
 	StartedAt  pgtype.Timestamptz
@@ -162,6 +170,7 @@ func (q *Queries) GetSagaSteps(ctx context.Context, sagaID string) ([]GetSagaSte
 		var i GetSagaStepsRow
 		if err := rows.Scan(
 			&i.Name,
+			&i.GrpcTarget,
 			&i.Status,
 			&i.Attempt,
 			&i.StartedAt,
@@ -179,7 +188,7 @@ func (q *Queries) GetSagaSteps(ctx context.Context, sagaID string) ([]GetSagaSte
 }
 
 const getSagaStepsForUpdate = `-- name: GetSagaStepsForUpdate :many
-SELECT name, status, attempt, started_at, finished_at, error
+SELECT name, grpc_target, status, attempt, started_at, finished_at, error
 FROM saga_steps
 WHERE saga_id = $1
 ORDER BY step_index ASC
@@ -188,6 +197,7 @@ FOR UPDATE
 
 type GetSagaStepsForUpdateRow struct {
 	Name       string
+	GrpcTarget string
 	Status     string
 	Attempt    int32
 	StartedAt  pgtype.Timestamptz
@@ -206,6 +216,7 @@ func (q *Queries) GetSagaStepsForUpdate(ctx context.Context, sagaID string) ([]G
 		var i GetSagaStepsForUpdateRow
 		if err := rows.Scan(
 			&i.Name,
+			&i.GrpcTarget,
 			&i.Status,
 			&i.Attempt,
 			&i.StartedAt,
@@ -227,6 +238,7 @@ INSERT INTO saga_steps (
     saga_id,
     step_index,
     name,
+    grpc_target,
     status,
     attempt,
     started_at,
@@ -234,13 +246,14 @@ INSERT INTO saga_steps (
     error,
     created_at,
     updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
 `
 
 type InsertSagaStepParams struct {
 	SagaID     string
 	StepIndex  int32
 	Name       string
+	GrpcTarget string
 	Status     string
 	Attempt    int32
 	StartedAt  pgtype.Timestamptz
@@ -253,6 +266,7 @@ func (q *Queries) InsertSagaStep(ctx context.Context, arg InsertSagaStepParams) 
 		arg.SagaID,
 		arg.StepIndex,
 		arg.Name,
+		arg.GrpcTarget,
 		arg.Status,
 		arg.Attempt,
 		arg.StartedAt,

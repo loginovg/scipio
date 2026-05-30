@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	sagav1 "scipio/gen/proto"
 	"scipio/internal/domain"
@@ -25,7 +26,7 @@ func New(svc *service.Service) *Server {
 }
 
 func (s *Server) StartSaga(ctx context.Context, req *sagav1.StartSagaRequest) (*sagav1.StartSagaResponse, error) {
-	id, err := s.svc.StartSaga(ctx, req.GetWorkflow(), req.GetContext())
+	id, err := s.svc.StartSaga(ctx, req.GetWorkflow(), req.GetContext(), mapStartSagaSteps(req.GetSteps()))
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -65,7 +66,12 @@ func mapError(err error) error {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return status.Error(codes.NotFound, err.Error())
-	case errors.Is(err, service.ErrInvalidWorkflow), errors.Is(err, service.ErrInvalidContext), errors.Is(err, service.ErrInvalidStatusFilter):
+	case errors.Is(err, service.ErrInvalidWorkflow),
+		errors.Is(err, service.ErrInvalidContext),
+		errors.Is(err, service.ErrStepsRequired),
+		errors.Is(err, service.ErrInvalidStatusFilter),
+		errors.Is(err, service.ErrInvalidStepName),
+		errors.Is(err, service.ErrInvalidStepGRPCTarget):
 		return status.Error(codes.InvalidArgument, err.Error())
 	default:
 		return status.Error(codes.Internal, err.Error())
@@ -78,10 +84,7 @@ func mapSaga(saga domain.Saga) (*sagav1.Saga, error) {
 		return nil, fmt.Errorf("failed to marshal saga context: %w", err)
 	}
 
-	steps := make([]*sagav1.SagaStep, 0, len(saga.Steps))
-	for _, step := range saga.Steps {
-		steps = append(steps, mapStep(step))
-	}
+	steps := domain.MapSagaSteps(saga.Steps, mapStep)
 
 	return &sagav1.Saga{
 		Id:        saga.ID,
@@ -89,20 +92,20 @@ func mapSaga(saga domain.Saga) (*sagav1.Saga, error) {
 		Status:    mapSagaStatus(saga.Status),
 		Context:   serializedContext,
 		Steps:     steps,
-		CreatedAt: saga.CreatedAt.UTC().Format(timeLayout),
-		UpdatedAt: saga.UpdatedAt.UTC().Format(timeLayout),
+		CreatedAt: saga.CreatedAt.UTC().Format(time.RFC3339Nano),
+		UpdatedAt: saga.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}, nil
 }
 
 func mapStep(step domain.SagaStep) *sagav1.SagaStep {
 	startedAt := ""
 	if step.StartedAt != nil {
-		startedAt = step.StartedAt.UTC().Format(timeLayout)
+		startedAt = step.StartedAt.UTC().Format(time.RFC3339Nano)
 	}
 
 	finishedAt := ""
 	if step.FinishedAt != nil {
-		finishedAt = step.FinishedAt.UTC().Format(timeLayout)
+		finishedAt = step.FinishedAt.UTC().Format(time.RFC3339Nano)
 	}
 
 	return &sagav1.SagaStep{
@@ -112,10 +115,25 @@ func mapStep(step domain.SagaStep) *sagav1.SagaStep {
 		StartedAt:  startedAt,
 		FinishedAt: finishedAt,
 		Error:      step.Error,
+		GrpcTarget: step.GRPCTarget,
 	}
 }
 
-const timeLayout = "2006-01-02T15:04:05.999999999Z07:00"
+func mapStartSagaSteps(steps []*sagav1.StartSagaStep) []service.StartSagaStep {
+	if len(steps) == 0 {
+		return nil
+	}
+
+	mapped := make([]service.StartSagaStep, 0, len(steps))
+	for _, step := range steps {
+		mapped = append(mapped, service.StartSagaStep{
+			Name:       step.GetName(),
+			GRPCTarget: step.GetGrpcTarget(),
+		})
+	}
+
+	return mapped
+}
 
 func mapSagaStatus(statusValue domain.SagaStatus) sagav1.SagaStatus {
 	switch statusValue {

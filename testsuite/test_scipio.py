@@ -63,6 +63,34 @@ def test_should_share_saga_state_between_service_instances_when_using_postgres_s
     assert saga["id"] == saga_id
 
 
+def test_should_dispatch_context_to_step_executor_when_saga_is_started_in_cluster(
+    scipio_cluster,
+    start_saga,
+    wait_for_status,
+    wait_for_step_dispatch,
+):
+    # given
+    session, first_base_url, second_base_url, _ = scipio_cluster
+    saga_context = {
+        "user": {"id": 44, "tier": "gold"},
+        "items": [{"sku": "book-1", "qty": 2}],
+        "total": 120.75,
+    }
+
+    # when
+    saga_id = start_saga(session, first_base_url, "dispatch_ctx_flow", saga_context)
+    saga = wait_for_status(session, second_base_url, saga_id, "COMPLETED")
+    calls = wait_for_step_dispatch(saga_id, expected_calls=1)
+
+    # then
+    assert saga["id"] == saga_id
+    assert len(calls) == 1
+    assert calls[0]["saga_id"] == saga_id
+    assert calls[0]["workflow"] == "dispatch_ctx_flow"
+    assert calls[0]["step_name"] == "dispatch_ctx_flow"
+    assert calls[0]["context"] == saga_context
+
+
 def test_should_handle_concurrent_cancellation_from_multiple_instances_when_lock_is_enabled(
     scipio_cluster,
     start_saga,
@@ -158,10 +186,10 @@ def test_should_recover_stale_running_step_when_worker_drains_postgres_steps(
     )
     db_connection.execute(
         """
-        INSERT INTO saga_steps (saga_id, step_index, name, status, attempt, started_at, finished_at, error, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, NOW() - INTERVAL '2 minute', NULL, NULL, NOW(), NOW() - INTERVAL '2 minute')
+        INSERT INTO saga_steps (saga_id, step_index, name, grpc_target, status, attempt, started_at, finished_at, error, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, NOW() - INTERVAL '2 minute', NULL, NULL, NOW(), NOW() - INTERVAL '2 minute')
         """,
-        (saga_id, 0, "recover_flow", "RUNNING", 1),
+        (saga_id, 0, "recover_flow", "step-executor:50051", "RUNNING", 1),
     )
 
     # when

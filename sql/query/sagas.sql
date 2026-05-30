@@ -43,6 +43,7 @@ INSERT INTO saga_steps (
     saga_id,
     step_index,
     name,
+    grpc_target,
     status,
     attempt,
     started_at,
@@ -50,16 +51,16 @@ INSERT INTO saga_steps (
     error,
     created_at,
     updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW());
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW());
 
 -- name: GetSagaSteps :many
-SELECT name, status, attempt, started_at, finished_at, error
+SELECT name, grpc_target, status, attempt, started_at, finished_at, error
 FROM saga_steps
 WHERE saga_id = $1
 ORDER BY step_index ASC;
 
 -- name: GetSagaStepsForUpdate :many
-SELECT name, status, attempt, started_at, finished_at, error
+SELECT name, grpc_target, status, attempt, started_at, finished_at, error
 FROM saga_steps
 WHERE saga_id = $1
 ORDER BY step_index ASC
@@ -74,6 +75,13 @@ WITH candidate AS (
       AND (
         ss.status = 'PENDING'
         OR (ss.status = 'RUNNING' AND ss.updated_at <= $1)
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM saga_steps prev
+        WHERE prev.saga_id = ss.saga_id
+          AND prev.step_index < ss.step_index
+          AND prev.status <> 'COMPLETED'
       )
     ORDER BY ss.updated_at ASC, ss.id ASC
     FOR UPDATE OF ss SKIP LOCKED

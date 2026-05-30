@@ -18,6 +18,9 @@ import (
 
 var ErrInvalidWorkflow = errors.New("workflow must not be empty")
 var ErrInvalidContext = errors.New("context must be a valid JSON object")
+var ErrStepsRequired = errors.New("steps must not be empty")
+var ErrInvalidStepName = errors.New("step name must not be empty")
+var ErrInvalidStepGRPCTarget = errors.New("step grpc target must not be empty")
 var ErrInvalidStatusFilter = errors.New("invalid status filter")
 var ErrInvalidPagination = errors.New("invalid pagination")
 var ErrStoreNotConfigured = errors.New("saga store is not configured")
@@ -32,6 +35,11 @@ type sagaStore interface {
 	Get(ctx context.Context, id string) (domain.Saga, error)
 	List(ctx context.Context, status *domain.SagaStatus, limit int, offset int) ([]domain.Saga, error)
 	Update(ctx context.Context, id string, fn func(*domain.Saga) error) (domain.Saga, error)
+}
+
+type StartSagaStep struct {
+	Name       string
+	GRPCTarget string
 }
 
 type Service struct {
@@ -50,17 +58,21 @@ func New(store sagaStore, locker lock.Locker, lockTTL time.Duration, logger *slo
 	}
 }
 
-func (s *Service) StartSaga(ctx context.Context, workflow string, rawContext []byte) (string, error) {
+func (s *Service) StartSaga(ctx context.Context, workflow string, rawContext []byte, steps []StartSagaStep) (string, error) {
 	if s.store == nil {
 		return "", ErrStoreNotConfigured
 	}
 
-	trimmedWorkflow := strings.TrimSpace(workflow)
-	if trimmedWorkflow == "" {
+	if workflow == "" {
 		return "", ErrInvalidWorkflow
 	}
 
-	normalizedContext, err := normalizeContext(rawContext)
+	sagaContext, err := normalizeContext(rawContext)
+	if err != nil {
+		return "", err
+	}
+
+	sagaSteps, err := validateStartSagaSteps(steps)
 	if err != nil {
 		return "", err
 	}
@@ -72,16 +84,11 @@ func (s *Service) StartSaga(ctx context.Context, workflow string, rawContext []b
 
 	now := time.Now().UTC()
 	saga := domain.Saga{
-		ID:       sagaID,
-		Workflow: trimmedWorkflow,
-		Status:   domain.SagaStatusCreated,
-		Context:  normalizedContext,
-		Steps: []domain.SagaStep{
-			{
-				Name:   trimmedWorkflow,
-				Status: domain.SagaStepStatusPending,
-			},
-		},
+		ID:        sagaID,
+		Workflow:  workflow,
+		Status:    domain.SagaStatusCreated,
+		Context:   sagaContext,
+		Steps:     sagaSteps,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -168,27 +175,12 @@ func (s *Service) ListSagas(ctx context.Context, status string, limit int, offse
 		return s.store.List(ctx, nil, normalizedLimit, normalizedOffset)
 	}
 
-	parsedStatus, statusErr := ParseSagaStatus(normalizedStatus)
+	parsedStatus, statusErr := domain.ParseSagaStatus(normalizedStatus)
 	if statusErr != nil {
-		return nil, statusErr
+		return nil, ErrInvalidStatusFilter
 	}
 
 	return s.store.List(ctx, &parsedStatus, normalizedLimit, normalizedOffset)
-}
-
-func ParseSagaStatus(raw string) (domain.SagaStatus, error) {
-	status := domain.SagaStatus(strings.ToUpper(strings.TrimSpace(raw)))
-	switch status {
-	case domain.SagaStatusCreated,
-		domain.SagaStatusRunning,
-		domain.SagaStatusCompleted,
-		domain.SagaStatusCanceling,
-		domain.SagaStatusCompensated,
-		domain.SagaStatusFailed:
-		return status, nil
-	default:
-		return "", ErrInvalidStatusFilter
-	}
 }
 
 func normalizeContext(rawContext []byte) (map[string]any, error) {
@@ -206,6 +198,31 @@ func normalizeContext(rawContext []byte) (map[string]any, error) {
 	}
 
 	return parsed, nil
+}
+
+func validateStartSagaSteps(requested []StartSagaStep) ([]domain.SagaStep, error) {
+	if len(requested) == 0 {
+		return nil, ErrStepsRequired
+	}
+
+	steps := make([]domain.SagaStep, 0, len(requested))
+	for _, requestedStep := range requested {
+		if requestedStep.Name == "" {
+			return nil, ErrInvalidStepName
+		}
+
+		if requestedStep.GRPCTarget == "" {
+			return nil, ErrInvalidStepGRPCTarget
+		}
+
+		steps = append(steps, domain.SagaStep{
+			Name:       requestedStep.Name,
+			GRPCTarget: requestedStep.GRPCTarget,
+			Status:     domain.SagaStepStatusPending,
+		})
+	}
+
+	return steps, nil
 }
 
 func generateSagaID() (string, error) {

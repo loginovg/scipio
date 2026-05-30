@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS saga_steps (
     saga_id TEXT NOT NULL REFERENCES sagas(id) ON DELETE CASCADE,
     step_index INTEGER NOT NULL CHECK (step_index >= 0),
     name TEXT NOT NULL,
+    grpc_target TEXT NOT NULL,
     status TEXT NOT NULL CHECK (
         status IN (
             'PENDING',

@@ -163,12 +163,18 @@ components:
       additionalProperties: false
       required:
         - workflow
+        - steps
       properties:
         workflow:
           type: string
         context:
           type: object
           additionalProperties: true
+        steps:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/StartSagaStep"
     StartSagaResponse:
       type: object
       additionalProperties: false
@@ -246,6 +252,19 @@ components:
           type: string
           format: date-time
         error:
+          type: string
+        grpc_target:
+          type: string
+    StartSagaStep:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - grpc_target
+      properties:
+        name:
+          type: string
+        grpc_target:
           type: string
     SagaStatus:
       type: string

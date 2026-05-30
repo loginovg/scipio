@@ -22,6 +22,7 @@ type SagaStep struct {
 	SagaID     string
 	StepIndex  int32
 	Name       string
+	GrpcTarget string
 	Status     string
 	Attempt    int32
 	StartedAt  pgtype.Timestamptz
