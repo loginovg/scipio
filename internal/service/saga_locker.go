@@ -19,13 +19,17 @@ func newSagaLocker(locker lock.Locker, lockTTL time.Duration, logger *slog.Logge
 		locker = lock.NewNoop()
 	}
 
+	if lockTTL <= 0 {
+		panic(lock.ErrInvalidTTL)
+	}
+
 	if logger == nil {
 		logger = slog.Default()
 	}
 
 	return sagaLocker{
 		locker:  locker,
-		lockTTL: normalizeLockTTL(lockTTL),
+		lockTTL: lockTTL,
 		logger:  logger,
 	}
 }
@@ -45,12 +49,4 @@ func (s sagaLocker) withSagaLock(ctx context.Context, sagaID string, fn func(con
 	}()
 
 	return fn(ctx)
-}
-
-func normalizeLockTTL(lockTTL time.Duration) time.Duration {
-	if lockTTL <= 0 {
-		return 5 * time.Second
-	}
-
-	return lockTTL
 }

@@ -243,6 +243,16 @@ func TestShouldReturnErrStoreNotConfiguredWhenStepRunnerStoreIsNil(t *testing.T)
 	require.ErrorIs(t, err, ErrStoreNotConfigured)
 }
 
+func TestShouldPanicWhenLockTTLIsNotPositiveInStepRunnerConstructor(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	require.PanicsWithValue(t, lock.ErrInvalidTTL, func() {
+		NewStepRunner(newMemoryStepQueueStore(), lock.NewNoop(), 0, 1, time.Millisecond, time.Second, nil, logger)
+	})
+}
+
 type memoryStepQueueStore struct {
 	inner *store.Memory
 }

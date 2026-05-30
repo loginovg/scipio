@@ -348,6 +348,16 @@ func TestShouldReturnErrStoreNotConfiguredWhenStoreIsNil(t *testing.T) {
 	require.ErrorIs(t, listErr, ErrStoreNotConfigured)
 }
 
+func TestShouldPanicWhenLockTTLIsNotPositiveInServiceConstructor(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	require.PanicsWithValue(t, lock.ErrInvalidTTL, func() {
+		New(store.NewMemory(), lock.NewNoop(), 0, logger)
+	})
+}
+
 func newTestService() *Service {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return New(store.NewMemory(), lock.NewNoop(), 5*time.Second, logger)

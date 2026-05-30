@@ -7,7 +7,7 @@ Scipio is a lightweight Saga orchestrator with gRPC and HTTP interfaces.
 - Start, query, list, and cancel sagas
 - Deterministic saga state transitions
 - PostgreSQL-backed saga persistence via `pgx`
-- Redis distributed saga locking via `redis-go`
+- Redis distributed saga locking via `go-redsync/redsync`
 - gRPC API from `api/proto/saga.proto`
 - HTTP API from `api/openapi/saga.yaml`
 - Multi-instance safe coordination by saga ID
