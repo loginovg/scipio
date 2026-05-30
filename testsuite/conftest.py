@@ -136,6 +136,14 @@ def scipio_cluster(container_base_url, wait_for_health):
             ):
                 with DockerImage(path=str(ROOT), tag="scipio:test", dockerfile_path="Dockerfile", clean_up=True) as image:
                     env = {
+                        "SCIPIO_GRPC_PORT": "9090",
+                        "SCIPIO_HTTP_PORT": "8080",
+                        "SCIPIO_STEP_WORKERS": "8",
+                        "SCIPIO_STEP_POLL_INTERVAL": "25ms",
+                        "SCIPIO_STEP_STALE_TIMEOUT": "5s",
+                        "SCIPIO_LOCK_TTL": "5s",
+                        "SCIPIO_LOCK_RETRY_INTERVAL": "25ms",
+                        "SCIPIO_MIGRATIONS_PATH": "/app/migrations",
                         "PG_CONN": "postgresql://scipio:scipio@postgres:5432/scipio?sslmode=disable",
                         "REDIS_CONN": "redis://redis:6379/0",
                     }
