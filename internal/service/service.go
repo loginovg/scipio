@@ -172,7 +172,7 @@ func (s *Service) ListSagas(ctx context.Context, status string, limit int, offse
 
 func parseContext(rawContext []byte) (map[string]any, error) {
 	if len(rawContext) == 0 {
-		return map[string]any{}, nil
+		return nil, ErrInvalidContext
 	}
 
 	var parsed map[string]any
@@ -181,7 +181,7 @@ func parseContext(rawContext []byte) (map[string]any, error) {
 	}
 
 	if parsed == nil {
-		return map[string]any{}, nil
+		return nil, ErrInvalidContext
 	}
 
 	return parsed, nil
