@@ -20,6 +20,7 @@ var ErrInvalidPrefix = errors.New("lock prefix must not be empty")
 type redisMutex interface {
 	LockContext(ctx context.Context) error
 	UnlockContext(ctx context.Context) (bool, error)
+	ExtendContext(ctx context.Context) (bool, error)
 }
 
 type Redis struct {
@@ -135,6 +136,18 @@ func (h *redisHandle) Release(ctx context.Context) error {
 	})
 
 	return h.releaseErr
+}
+
+func (h *redisHandle) Extend(ctx context.Context) error {
+	extended, err := h.mutex.ExtendContext(ctx)
+	if err != nil {
+		return err
+	}
+	if !extended {
+		return redsync.ErrExtendFailed
+	}
+
+	return nil
 }
 
 func isRaceError(err error) bool {

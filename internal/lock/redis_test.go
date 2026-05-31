@@ -44,15 +44,19 @@ type fakeMutex struct {
 	mu             sync.Mutex
 	lockResults    []error
 	defaultLockErr error
+	extendResults  []unlockResult
+	defaultExtend  unlockResult
 	unlockResults  []unlockResult
 	defaultUnlock  unlockResult
 	lockCalls      int
+	extendCalls    int
 	unlockCalls    int
 }
 
 func newFakeMutex() *fakeMutex {
 	return &fakeMutex{
 		defaultUnlock: unlockResult{ok: true},
+		defaultExtend: unlockResult{ok: true},
 	}
 }
 
@@ -86,11 +90,26 @@ func (f *fakeMutex) UnlockContext(_ context.Context) (bool, error) {
 	return result.ok, result.err
 }
 
-func (f *fakeMutex) snapshotCalls() (int, int) {
+func (f *fakeMutex) ExtendContext(_ context.Context) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	return f.lockCalls, f.unlockCalls
+	f.extendCalls++
+
+	if len(f.extendResults) == 0 {
+		return f.defaultExtend.ok, f.defaultExtend.err
+	}
+
+	result := f.extendResults[0]
+	f.extendResults = f.extendResults[1:]
+	return result.ok, result.err
+}
+
+func (f *fakeMutex) snapshotCalls() (int, int, int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.lockCalls, f.extendCalls, f.unlockCalls
 }
 
 func TestShouldAcquireAndReleaseLockWhenMutexAllows(t *testing.T) {
@@ -111,8 +130,9 @@ func TestShouldAcquireAndReleaseLockWhenMutexAllows(t *testing.T) {
 	require.NoError(t, handle.Release(context.Background()))
 	require.NoError(t, handle.Release(context.Background()))
 
-	lockCalls, unlockCalls := mutex.snapshotCalls()
+	lockCalls, extendCalls, unlockCalls := mutex.snapshotCalls()
 	require.Equal(t, 1, lockCalls)
+	require.Equal(t, 0, extendCalls)
 	require.Equal(t, 1, unlockCalls)
 	require.Equal(t, []string{"test:saga-1"}, factory.namesSnapshot())
 }
@@ -137,8 +157,9 @@ func TestShouldRetryUntilLockAcquiredWhenMutexReportsContention(t *testing.T) {
 	require.NoError(t, acquireErr)
 	require.NotNil(t, handle)
 
-	lockCalls, unlockCalls := mutex.snapshotCalls()
+	lockCalls, extendCalls, unlockCalls := mutex.snapshotCalls()
 	require.Equal(t, 3, lockCalls)
+	require.Equal(t, 0, extendCalls)
 	require.Equal(t, 0, unlockCalls)
 }
 
@@ -180,8 +201,9 @@ func TestShouldReturnAcquireErrorWhenMutexReturnsNonContentionError(t *testing.T
 	require.Nil(t, handle)
 	require.ErrorIs(t, acquireErr, expectedErr)
 
-	lockCalls, unlockCalls := mutex.snapshotCalls()
+	lockCalls, extendCalls, unlockCalls := mutex.snapshotCalls()
 	require.Equal(t, 1, lockCalls)
+	require.Equal(t, 0, extendCalls)
 	require.Equal(t, 0, unlockCalls)
 }
 
@@ -282,7 +304,72 @@ func TestShouldIgnoreErrLockAlreadyExpiredWhenReleasingLock(t *testing.T) {
 
 	require.NoError(t, handle.Release(context.Background()))
 
-	lockCalls, unlockCalls := mutex.snapshotCalls()
+	lockCalls, extendCalls, unlockCalls := mutex.snapshotCalls()
 	require.Equal(t, 1, lockCalls)
+	require.Equal(t, 0, extendCalls)
 	require.Equal(t, 1, unlockCalls)
+}
+
+func TestShouldExtendLockWhenMutexAllows(t *testing.T) {
+	t.Parallel()
+
+	mutex := newFakeMutex()
+	factory := &fakeMutexFactory{mutex: mutex}
+	locker := &Redis{
+		newMutex:      factory.NewMutex,
+		prefix:        "test:",
+		retryInterval: time.Millisecond,
+	}
+
+	handle, acquireErr := locker.Acquire(context.Background(), "saga-1", time.Second)
+	require.NoError(t, acquireErr)
+	require.NotNil(t, handle)
+
+	require.NoError(t, handle.Extend(context.Background()))
+
+	lockCalls, extendCalls, unlockCalls := mutex.snapshotCalls()
+	require.Equal(t, 1, lockCalls)
+	require.Equal(t, 1, extendCalls)
+	require.Equal(t, 0, unlockCalls)
+}
+
+func TestShouldReturnExtendErrorWhenMutexExtendFails(t *testing.T) {
+	t.Parallel()
+
+	expectedErr := errors.New("extend failed")
+	mutex := newFakeMutex()
+	mutex.extendResults = []unlockResult{{ok: false, err: expectedErr}}
+	factory := &fakeMutexFactory{mutex: mutex}
+	locker := &Redis{
+		newMutex:      factory.NewMutex,
+		prefix:        "test:",
+		retryInterval: time.Millisecond,
+	}
+
+	handle, acquireErr := locker.Acquire(context.Background(), "saga-1", time.Second)
+	require.NoError(t, acquireErr)
+	require.NotNil(t, handle)
+
+	extendErr := handle.Extend(context.Background())
+	require.ErrorIs(t, extendErr, expectedErr)
+}
+
+func TestShouldReturnErrExtendFailedWhenMutexExtendReturnsFalseWithoutError(t *testing.T) {
+	t.Parallel()
+
+	mutex := newFakeMutex()
+	mutex.extendResults = []unlockResult{{ok: false, err: nil}}
+	factory := &fakeMutexFactory{mutex: mutex}
+	locker := &Redis{
+		newMutex:      factory.NewMutex,
+		prefix:        "test:",
+		retryInterval: time.Millisecond,
+	}
+
+	handle, acquireErr := locker.Acquire(context.Background(), "saga-1", time.Second)
+	require.NoError(t, acquireErr)
+	require.NotNil(t, handle)
+
+	extendErr := handle.Extend(context.Background())
+	require.ErrorIs(t, extendErr, redsync.ErrExtendFailed)
 }

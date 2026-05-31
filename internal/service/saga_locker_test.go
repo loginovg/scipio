@@ -1,0 +1,106 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"scipio/internal/lock"
+
+	"github.com/stretchr/testify/require"
+)
+
+type watchdogTestLocker struct {
+	handle lock.Handle
+}
+
+func (l watchdogTestLocker) Acquire(_ context.Context, _ string, _ time.Duration) (lock.Handle, error) {
+	return l.handle, nil
+}
+
+type watchdogTestHandle struct {
+	mu          sync.Mutex
+	extendCalls int
+	extendErr   error
+	extendAt    int
+	closed      chan struct{}
+}
+
+func (h *watchdogTestHandle) Release(_ context.Context) error {
+	close(h.closed)
+	return nil
+}
+
+func (h *watchdogTestHandle) Extend(_ context.Context) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.extendCalls++
+	if h.extendErr != nil && h.extendCalls >= h.extendAt {
+		return h.extendErr
+	}
+
+	return nil
+}
+
+func (h *watchdogTestHandle) calls() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	return h.extendCalls
+}
+
+func TestShouldRenewSagaLockWhenOperationTakesLongerThanHalfLockTTL(t *testing.T) {
+	t.Parallel()
+
+	handle := &watchdogTestHandle{closed: make(chan struct{})}
+	locker := newSagaLocker(watchdogTestLocker{handle: handle}, 20*time.Millisecond)
+
+	err := locker.withSagaLock(context.Background(), "saga-1", func(ctx context.Context) error {
+		deadline := time.After(200 * time.Millisecond)
+		for {
+			if handle.calls() > 0 {
+				return nil
+			}
+
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-deadline:
+				return errors.New("watchdog did not renew lock")
+			default:
+			}
+		}
+	})
+	require.NoError(t, err)
+	require.Greater(t, handle.calls(), 0)
+
+	select {
+	case <-handle.closed:
+	default:
+		t.Fatal("expected lock handle to be released")
+	}
+}
+
+func TestShouldReturnRenewErrorWhenWatchdogCannotExtendLock(t *testing.T) {
+	t.Parallel()
+
+	renewErr := errors.New("renew failed")
+	handle := &watchdogTestHandle{extendErr: renewErr, extendAt: 1, closed: make(chan struct{})}
+	locker := newSagaLocker(watchdogTestLocker{handle: handle}, 20*time.Millisecond)
+
+	err := locker.withSagaLock(context.Background(), "saga-1", func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	require.Error(t, err)
+	require.ErrorIs(t, err, renewErr)
+
+	select {
+	case <-handle.closed:
+	default:
+		t.Fatal("expected lock handle to be released")
+	}
+}
