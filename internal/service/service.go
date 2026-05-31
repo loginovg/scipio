@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -48,18 +47,14 @@ type Service struct {
 	sagaLocker sagaLocker
 }
 
-func New(store sagaStore, locker lock.Locker, lockTTL time.Duration, logger *slog.Logger) (*Service, error) {
+func New(store sagaStore, locker lock.Locker, lockTTL time.Duration) (*Service, error) {
 	if lockTTL <= 0 {
 		return nil, lock.ErrInvalidTTL
 	}
 
-	if logger == nil {
-		logger = slog.Default()
-	}
-
 	return &Service{
 		store:      store,
-		sagaLocker: newSagaLocker(locker, lockTTL, logger),
+		sagaLocker: newSagaLocker(locker, lockTTL),
 	}, nil
 }
 

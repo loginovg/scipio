@@ -11,22 +11,16 @@ import (
 type sagaLocker struct {
 	locker  lock.Locker
 	lockTTL time.Duration
-	logger  *slog.Logger
 }
 
-func newSagaLocker(locker lock.Locker, lockTTL time.Duration, logger *slog.Logger) sagaLocker {
+func newSagaLocker(locker lock.Locker, lockTTL time.Duration) sagaLocker {
 	if locker == nil {
 		locker = lock.NewNoop()
-	}
-
-	if logger == nil {
-		logger = slog.Default()
 	}
 
 	return sagaLocker{
 		locker:  locker,
 		lockTTL: lockTTL,
-		logger:  logger,
 	}
 }
 
@@ -40,7 +34,7 @@ func (s sagaLocker) withSagaLock(ctx context.Context, sagaID string, fn func(con
 		releaseCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		if releaseErr := handle.Release(releaseCtx); releaseErr != nil {
-			s.logger.WarnContext(releaseCtx, "failed to release saga lock", "saga_id", sagaID, "error", releaseErr)
+			slog.WarnContext(releaseCtx, "failed to release saga lock", "saga_id", sagaID, "error", releaseErr)
 		}
 	}()
 

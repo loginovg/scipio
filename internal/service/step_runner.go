@@ -26,7 +26,6 @@ type StepRunner struct {
 	pollInterval time.Duration
 	staleAfter   time.Duration
 	dispatcher   stepDispatcher
-	logger       *slog.Logger
 	sagaLocker   sagaLocker
 	pool         *workerpool.Pool[domain.ClaimedSagaStep, struct{}]
 }
@@ -39,7 +38,6 @@ func NewStepRunner(
 	pollInterval time.Duration,
 	staleAfter time.Duration,
 	dispatcher stepDispatcher,
-	logger *slog.Logger,
 ) (*StepRunner, error) {
 	if lockTTL <= 0 {
 		return nil, lock.ErrInvalidTTL
@@ -54,9 +52,6 @@ func NewStepRunner(
 		return nil, ErrInvalidStepStaleTimeout
 	}
 
-	if logger == nil {
-		logger = slog.Default()
-	}
 	if dispatcher == nil {
 		dispatcher = newGRPCStepDispatcher()
 	}
@@ -66,8 +61,7 @@ func NewStepRunner(
 		pollInterval: pollInterval,
 		staleAfter:   staleAfter,
 		dispatcher:   dispatcher,
-		logger:       logger,
-		sagaLocker:   newSagaLocker(locker, lockTTL, logger),
+		sagaLocker:   newSagaLocker(locker, lockTTL),
 	}
 
 	runner.pool = workerpool.New[domain.ClaimedSagaStep, struct{}](workers, func(ctx context.Context, step domain.ClaimedSagaStep) (struct{}, error) {
@@ -87,7 +81,7 @@ func (r *StepRunner) Run(ctx context.Context) error {
 		defer close(resultsDone)
 		for res := range r.pool.Results() {
 			if res.Err != nil {
-				r.logger.WarnContext(ctx, "step execution failed", "error", res.Err)
+				slog.WarnContext(ctx, "step execution failed", "error", res.Err)
 			}
 		}
 	}()
@@ -96,7 +90,7 @@ func (r *StepRunner) Run(ctx context.Context) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		if shutdownErr := r.pool.Shutdown(shutdownCtx); shutdownErr != nil {
-			r.logger.WarnContext(ctx, "failed to shutdown step runner pool", "error", shutdownErr)
+			slog.WarnContext(ctx, "failed to shutdown step runner pool", "error", shutdownErr)
 		}
 		<-resultsDone
 	}()
@@ -117,7 +111,7 @@ func (r *StepRunner) Run(ctx context.Context) error {
 				return nil
 			}
 
-			r.logger.WarnContext(ctx, "failed to claim saga step", "error", err)
+			slog.WarnContext(ctx, "failed to claim saga step", "error", err)
 			select {
 			case <-ctx.Done():
 				return nil
@@ -140,7 +134,7 @@ func (r *StepRunner) Run(ctx context.Context) error {
 				return nil
 			}
 
-			r.logger.WarnContext(ctx, "failed to submit claimed saga step", "saga_id", claimed.SagaID, "step_index", claimed.StepIndex, "error", submitErr)
+			slog.WarnContext(ctx, "failed to submit claimed saga step", "saga_id", claimed.SagaID, "step_index", claimed.StepIndex, "error", submitErr)
 			select {
 			case <-ctx.Done():
 				return nil

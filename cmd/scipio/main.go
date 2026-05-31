@@ -28,10 +28,11 @@ import (
 )
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
 	cfg, err := config.Load()
 	if err != nil {
-		logger.Error("failed to parse config", "error", err)
+		slog.Error("failed to parse config", "error", err)
 		os.Exit(1)
 	}
 
@@ -40,44 +41,44 @@ func main() {
 
 	postgresStore, err := store.NewPostgres(ctx, cfg.PostgresConnectionString)
 	if err != nil {
-		logger.Error("failed to initialize postgres store", "error", err)
+		slog.Error("failed to initialize postgres store", "error", err)
 		os.Exit(1)
 	}
 	defer postgresStore.Close()
 
 	migrationFiles, err := loadMigrationFiles(cfg.MigrationsPath)
 	if err != nil {
-		logger.Error("failed to load migrations", "path", cfg.MigrationsPath, "error", err)
+		slog.Error("failed to load migrations", "path", cfg.MigrationsPath, "error", err)
 		os.Exit(1)
 	}
 
 	for _, migrationFile := range migrationFiles {
 		migrationSQL, readErr := os.ReadFile(migrationFile)
 		if readErr != nil {
-			logger.Error("failed to read migration file", "path", migrationFile, "error", readErr)
+			slog.Error("failed to read migration file", "path", migrationFile, "error", readErr)
 			os.Exit(1)
 		}
 
 		if migrateErr := postgresStore.Migrate(ctx, string(migrationSQL)); migrateErr != nil {
-			logger.Error("failed to apply migration", "path", migrationFile, "error", migrateErr)
+			slog.Error("failed to apply migration", "path", migrationFile, "error", migrateErr)
 			os.Exit(1)
 		}
 	}
 
 	redisLocker, err := lock.NewRedisFromURL(cfg.RedisConnectionString, "scipio:lock:saga:", cfg.LockRetryInterval)
 	if err != nil {
-		logger.Error("failed to initialize redis lock", "error", err)
+		slog.Error("failed to initialize redis lock", "error", err)
 		os.Exit(1)
 	}
 	defer func() {
 		if closeErr := redisLocker.Close(); closeErr != nil {
-			logger.Error("failed to close redis locker", "error", closeErr)
+			slog.Error("failed to close redis locker", "error", closeErr)
 		}
 	}()
 
-	sagaService, err := service.New(postgresStore, redisLocker, cfg.LockTTL, logger)
+	sagaService, err := service.New(postgresStore, redisLocker, cfg.LockTTL)
 	if err != nil {
-		logger.Error("failed to initialize saga service", "error", err)
+		slog.Error("failed to initialize saga service", "error", err)
 		os.Exit(1)
 	}
 
@@ -89,10 +90,9 @@ func main() {
 		cfg.StepPollInterval,
 		cfg.StepStaleTimeout,
 		nil,
-		logger,
 	)
 	if err != nil {
-		logger.Error("failed to initialize step runner", "error", err)
+		slog.Error("failed to initialize step runner", "error", err)
 		os.Exit(1)
 	}
 
@@ -101,13 +101,13 @@ func main() {
 	go func() {
 		defer close(runnerDone)
 		if runErr := stepRunner.Run(runnerCtx); runErr != nil {
-			logger.Error("step runner exited", "error", runErr)
+			slog.Error("step runner exited", "error", runErr)
 		}
 	}()
 
 	grpcListen, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GRPCPort))
 	if err != nil {
-		logger.Error("failed to listen for grpc", "error", err)
+		slog.Error("failed to listen for grpc", "error", err)
 		os.Exit(1)
 	}
 
@@ -116,7 +116,7 @@ func main() {
 
 	httpHandler, err := httpserver.New(sagaService).Handler()
 	if err != nil {
-		logger.Error("failed to configure http server", "error", err)
+		slog.Error("failed to configure http server", "error", err)
 		os.Exit(1)
 	}
 
@@ -128,12 +128,12 @@ func main() {
 
 	errCh := make(chan error, 2)
 	go func() {
-		logger.Info("grpc server started", "port", cfg.GRPCPort)
+		slog.Info("grpc server started", "port", cfg.GRPCPort)
 		errCh <- grpcSrv.Serve(grpcListen)
 	}()
 
 	go func() {
-		logger.Info("http server started", "port", cfg.HTTPPort)
+		slog.Info("http server started", "port", cfg.HTTPPort)
 		errCh <- httpSrv.ListenAndServe()
 	}()
 
@@ -142,10 +142,10 @@ func main() {
 
 	select {
 	case <-signalCtx.Done():
-		logger.Info("shutdown signal received")
+		slog.Info("shutdown signal received")
 	case runErr := <-errCh:
 		if runErr != nil && !errors.Is(runErr, http.ErrServerClosed) {
-			logger.Error("server exited", "error", runErr)
+			slog.Error("server exited", "error", runErr)
 		}
 	}
 
@@ -156,12 +156,12 @@ func main() {
 	select {
 	case <-runnerDone:
 	case <-shutdownCtx.Done():
-		logger.Warn("step runner shutdown timed out")
+		slog.Warn("step runner shutdown timed out")
 	}
 
 	grpcSrv.GracefulStop()
 	if shutdownErr := httpSrv.Shutdown(shutdownCtx); shutdownErr != nil {
-		logger.Error("failed to shutdown http server", "error", shutdownErr)
+		slog.Error("failed to shutdown http server", "error", shutdownErr)
 	}
 }
 

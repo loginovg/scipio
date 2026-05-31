@@ -3,8 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"io"
-	"log/slog"
 	"testing"
 	"time"
 
@@ -286,8 +284,7 @@ func TestShouldReturnLockErrorWhenSagaLockAcquisitionFailsDuringCancel(t *testin
 
 	// given
 	lockErr := errors.New("lock unavailable")
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc, newErr := New(store.NewMemory(), failingLocker{err: lockErr}, time.Second, logger)
+	svc, newErr := New(store.NewMemory(), failingLocker{err: lockErr}, time.Second)
 	require.NoError(t, newErr)
 
 	sagaID, err := svc.StartSaga(context.Background(), "order_flow", []byte(`{}`), startSteps("order_flow"))
@@ -305,13 +302,12 @@ func TestShouldReturnCancelUpdateErrorWhenCancelUpdateFailsDuringCancel(t *testi
 
 	// given
 	cancelUpdateErr := errors.New("cancel update failed")
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	storeWithFailedCancelUpdate := &failingUpdateStore{
 		inner:        store.NewMemory(),
 		failAtUpdate: 1,
 		err:          cancelUpdateErr,
 	}
-	svc, newErr := New(storeWithFailedCancelUpdate, lock.NewNoop(), time.Second, logger)
+	svc, newErr := New(storeWithFailedCancelUpdate, lock.NewNoop(), time.Second)
 	require.NoError(t, newErr)
 
 	sagaID, err := svc.StartSaga(context.Background(), "order_flow", []byte(`{}`), startSteps("order_flow"))
@@ -328,8 +324,7 @@ func TestShouldReturnErrStoreNotConfiguredWhenStoreIsNil(t *testing.T) {
 	t.Parallel()
 
 	// given
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc, newErr := New(nil, lock.NewNoop(), time.Second, logger)
+	svc, newErr := New(nil, lock.NewNoop(), time.Second)
 	require.NoError(t, newErr)
 
 	// when
@@ -360,9 +355,7 @@ func TestShouldReturnErrStoreNotConfiguredWhenStoreIsNil(t *testing.T) {
 func TestShouldReturnErrInvalidTTLWhenLockTTLIsNotPositiveInServiceConstructor(t *testing.T) {
 	t.Parallel()
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-
-	_, err := New(store.NewMemory(), lock.NewNoop(), 0, logger)
+	_, err := New(store.NewMemory(), lock.NewNoop(), 0)
 
 	require.ErrorIs(t, err, lock.ErrInvalidTTL)
 }
@@ -370,8 +363,7 @@ func TestShouldReturnErrInvalidTTLWhenLockTTLIsNotPositiveInServiceConstructor(t
 func newTestService(t *testing.T) *Service {
 	t.Helper()
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc, err := New(store.NewMemory(), lock.NewNoop(), 5*time.Second, logger)
+	svc, err := New(store.NewMemory(), lock.NewNoop(), 5*time.Second)
 	require.NoError(t, err)
 	return svc
 }
