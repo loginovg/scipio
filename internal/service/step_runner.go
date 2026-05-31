@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -20,6 +21,7 @@ type stepQueueStore interface {
 var ErrInvalidStepWorkers = errors.New("step workers must be positive")
 var ErrInvalidStepPollInterval = errors.New("step poll interval must be positive")
 var ErrInvalidStepStaleTimeout = errors.New("step stale timeout must be positive")
+var ErrClaimedStepIndexOutOfBounds = errors.New("claimed step index is out of bounds")
 
 type StepRunner struct {
 	store        stepQueueStore
@@ -152,7 +154,9 @@ func (r *StepRunner) processClaimedStep(ctx context.Context, claimed domain.Clai
 		}
 
 		if claimed.StepIndex < 0 || claimed.StepIndex >= len(saga.Steps) {
-			return nil
+			err := fmt.Errorf("%w: saga_id=%s step_index=%d steps_count=%d", ErrClaimedStepIndexOutOfBounds, claimed.SagaID, claimed.StepIndex, len(saga.Steps))
+			slog.WarnContext(lockCtx, "claimed saga step index out of bounds", "saga_id", claimed.SagaID, "step_index", claimed.StepIndex, "steps_count", len(saga.Steps), "error", err)
+			return err
 		}
 
 		step := saga.Steps[claimed.StepIndex]
@@ -170,7 +174,9 @@ func (r *StepRunner) processClaimedStep(ctx context.Context, claimed domain.Clai
 		dispatchErr := r.dispatcher.Dispatch(lockCtx, saga, step)
 		_, updateErr := r.store.Update(lockCtx, claimed.SagaID, func(candidate *domain.Saga) error {
 			if claimed.StepIndex < 0 || claimed.StepIndex >= len(candidate.Steps) {
-				return nil
+				err := fmt.Errorf("%w: saga_id=%s step_index=%d steps_count=%d", ErrClaimedStepIndexOutOfBounds, claimed.SagaID, claimed.StepIndex, len(candidate.Steps))
+				slog.WarnContext(lockCtx, "claimed saga step index out of bounds during update", "saga_id", claimed.SagaID, "step_index", claimed.StepIndex, "steps_count", len(candidate.Steps), "error", err)
+				return err
 			}
 
 			candidateStep := &candidate.Steps[claimed.StepIndex]

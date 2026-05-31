@@ -284,6 +284,38 @@ func TestShouldReturnErrCompensationNotImplementedWhenRunnerProcessesCancelingSa
 	require.Equal(t, domain.SagaStepStatusRunning, saga.Steps[0].Status)
 }
 
+func TestShouldReturnErrClaimedStepIndexOutOfBoundsWhenClaimedStepIndexIsOutsideSagaSteps(t *testing.T) {
+	t.Parallel()
+
+	queueStore := newMemoryStepQueueStore()
+	now := time.Now().UTC()
+	createErr := queueStore.Create(context.Background(), domain.Saga{
+		ID:       "saga-out-of-bounds-step",
+		Workflow: "order_flow",
+		Status:   domain.SagaStatusCreated,
+		Context:  map[string]any{},
+		Steps: []domain.SagaStep{{
+			Name:       "order_flow",
+			GRPCTarget: "billing:9000",
+			Status:     domain.SagaStepStatusPending,
+		}},
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	require.NoError(t, createErr)
+
+	runner, newRunnerErr := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, nil)
+	require.NoError(t, newRunnerErr)
+
+	err := runner.processClaimedStep(context.Background(), domain.ClaimedSagaStep{
+		SagaID:    "saga-out-of-bounds-step",
+		StepIndex: 5,
+		Name:      "order_flow",
+		Attempt:   1,
+	})
+	require.ErrorIs(t, err, ErrClaimedStepIndexOutOfBounds)
+}
+
 func TestShouldReturnErrInvalidTTLWhenLockTTLIsNotPositiveInStepRunnerConstructor(t *testing.T) {
 	t.Parallel()
 
