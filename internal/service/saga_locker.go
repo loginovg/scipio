@@ -19,10 +19,6 @@ func newSagaLocker(locker lock.Locker, lockTTL time.Duration, logger *slog.Logge
 		locker = lock.NewNoop()
 	}
 
-	if lockTTL <= 0 {
-		panic(lock.ErrInvalidTTL)
-	}
-
 	if logger == nil {
 		logger = slog.Default()
 	}

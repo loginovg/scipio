@@ -24,7 +24,8 @@ func TestShouldCompleteSagaWhenRunnerDrainsPendingStep(t *testing.T) {
 	queueStore := newMemoryStepQueueStore()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	dispatcher := &capturingStepDispatcher{}
-	svc := New(queueStore, lock.NewNoop(), time.Second, logger)
+	svc, newErr := New(queueStore, lock.NewNoop(), time.Second, logger)
+	require.NoError(t, newErr)
 
 	sagaID, err := svc.StartSaga(
 		context.Background(),
@@ -34,7 +35,8 @@ func TestShouldCompleteSagaWhenRunnerDrainsPendingStep(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	runner := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 2, time.Millisecond, time.Second, dispatcher, logger)
+	runner, newRunnerErr := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 2, time.Millisecond, time.Second, dispatcher, logger)
+	require.NoError(t, newRunnerErr)
 	runnerCtx, cancel := context.WithCancel(context.Background())
 	runnerDone := make(chan struct{})
 	runnerErr := make(chan error, 1)
@@ -91,7 +93,8 @@ func TestShouldRecoverRunningStepWhenRunnerDetectsStaleExecution(t *testing.T) {
 	require.NoError(t, createErr)
 
 	dispatcher := &capturingStepDispatcher{}
-	runner := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Millisecond, dispatcher, logger)
+	runner, newRunnerErr := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Millisecond, dispatcher, logger)
+	require.NoError(t, newRunnerErr)
 	runnerCtx, cancel := context.WithCancel(context.Background())
 	runnerDone := make(chan struct{})
 	runnerErr := make(chan error, 1)
@@ -128,7 +131,8 @@ func TestShouldDispatchSagaContextWhenRunnerExecutesConfiguredStep(t *testing.T)
 	queueStore := newMemoryStepQueueStore()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	dispatcher := &capturingStepDispatcher{}
-	svc := New(queueStore, lock.NewNoop(), time.Second, logger)
+	svc, newErr := New(queueStore, lock.NewNoop(), time.Second, logger)
+	require.NoError(t, newErr)
 
 	sagaID, err := svc.StartSaga(
 		context.Background(),
@@ -138,7 +142,8 @@ func TestShouldDispatchSagaContextWhenRunnerExecutesConfiguredStep(t *testing.T)
 	)
 	require.NoError(t, err)
 
-	runner := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, dispatcher, logger)
+	runner, newRunnerErr := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, dispatcher, logger)
+	require.NoError(t, newRunnerErr)
 	runnerCtx, cancel := context.WithCancel(context.Background())
 	runnerDone := make(chan struct{})
 	runnerErr := make(chan error, 1)
@@ -187,7 +192,8 @@ func TestShouldFailSagaWhenStepDispatchReturnsError(t *testing.T) {
 	queueStore := newMemoryStepQueueStore()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	dispatcher := &capturingStepDispatcher{err: errors.New("participant unavailable")}
-	svc := New(queueStore, lock.NewNoop(), time.Second, logger)
+	svc, newErr := New(queueStore, lock.NewNoop(), time.Second, logger)
+	require.NoError(t, newErr)
 
 	sagaID, err := svc.StartSaga(
 		context.Background(),
@@ -197,7 +203,8 @@ func TestShouldFailSagaWhenStepDispatchReturnsError(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	runner := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, dispatcher, logger)
+	runner, newRunnerErr := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, dispatcher, logger)
+	require.NoError(t, newRunnerErr)
 	runnerCtx, cancel := context.WithCancel(context.Background())
 	runnerDone := make(chan struct{})
 	runnerErr := make(chan error, 1)
@@ -234,7 +241,8 @@ func TestShouldReturnErrStoreNotConfiguredWhenStepRunnerStoreIsNil(t *testing.T)
 
 	// given
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	runner := NewStepRunner(nil, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, nil, logger)
+	runner, newRunnerErr := NewStepRunner(nil, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, nil, logger)
+	require.NoError(t, newRunnerErr)
 
 	// when
 	err := runner.Run(context.Background())
@@ -266,7 +274,8 @@ func TestShouldReturnErrCompensationNotImplementedWhenRunnerProcessesCancelingSa
 	})
 	require.NoError(t, createErr)
 
-	runner := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, nil, logger)
+	runner, newRunnerErr := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, nil, logger)
+	require.NoError(t, newRunnerErr)
 
 	err := runner.processClaimedStep(context.Background(), domain.ClaimedSagaStep{
 		SagaID:    "saga-canceling-step",
@@ -283,14 +292,44 @@ func TestShouldReturnErrCompensationNotImplementedWhenRunnerProcessesCancelingSa
 	require.Equal(t, domain.SagaStepStatusRunning, saga.Steps[0].Status)
 }
 
-func TestShouldPanicWhenLockTTLIsNotPositiveInStepRunnerConstructor(t *testing.T) {
+func TestShouldReturnErrInvalidTTLWhenLockTTLIsNotPositiveInStepRunnerConstructor(t *testing.T) {
 	t.Parallel()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	require.PanicsWithValue(t, lock.ErrInvalidTTL, func() {
-		NewStepRunner(newMemoryStepQueueStore(), lock.NewNoop(), 0, 1, time.Millisecond, time.Second, nil, logger)
-	})
+	_, err := NewStepRunner(newMemoryStepQueueStore(), lock.NewNoop(), 0, 1, time.Millisecond, time.Second, nil, logger)
+
+	require.ErrorIs(t, err, lock.ErrInvalidTTL)
+}
+
+func TestShouldReturnErrInvalidStepWorkersWhenStepRunnerWorkersAreNotPositive(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	_, err := NewStepRunner(newMemoryStepQueueStore(), lock.NewNoop(), time.Second, 0, time.Millisecond, time.Second, nil, logger)
+
+	require.ErrorIs(t, err, ErrInvalidStepWorkers)
+}
+
+func TestShouldReturnErrInvalidStepPollIntervalWhenStepRunnerPollIntervalIsNotPositive(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	_, err := NewStepRunner(newMemoryStepQueueStore(), lock.NewNoop(), time.Second, 1, 0, time.Second, nil, logger)
+
+	require.ErrorIs(t, err, ErrInvalidStepPollInterval)
+}
+
+func TestShouldReturnErrInvalidStepStaleTimeoutWhenStepRunnerStaleTimeoutIsNotPositive(t *testing.T) {
+	t.Parallel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	_, err := NewStepRunner(newMemoryStepQueueStore(), lock.NewNoop(), time.Second, 1, time.Millisecond, 0, nil, logger)
+
+	require.ErrorIs(t, err, ErrInvalidStepStaleTimeout)
 }
 
 type memoryStepQueueStore struct {

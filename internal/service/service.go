@@ -48,7 +48,11 @@ type Service struct {
 	sagaLocker sagaLocker
 }
 
-func New(store sagaStore, locker lock.Locker, lockTTL time.Duration, logger *slog.Logger) *Service {
+func New(store sagaStore, locker lock.Locker, lockTTL time.Duration, logger *slog.Logger) (*Service, error) {
+	if lockTTL <= 0 {
+		return nil, lock.ErrInvalidTTL
+	}
+
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -56,7 +60,7 @@ func New(store sagaStore, locker lock.Locker, lockTTL time.Duration, logger *slo
 	return &Service{
 		store:      store,
 		sagaLocker: newSagaLocker(locker, lockTTL, logger),
-	}
+	}, nil
 }
 
 func (s *Service) StartSaga(ctx context.Context, workflow string, rawContext []byte, steps []StartSagaStep) (string, error) {
@@ -68,7 +72,7 @@ func (s *Service) StartSaga(ctx context.Context, workflow string, rawContext []b
 		return "", ErrInvalidWorkflow
 	}
 
-	sagaContext, err := normalizeContext(rawContext)
+	sagaContext, err := parseContext(rawContext)
 	if err != nil {
 		return "", err
 	}
@@ -153,7 +157,7 @@ func (s *Service) ListSagas(ctx context.Context, status string, limit int, offse
 		return nil, ErrStoreNotConfigured
 	}
 
-	normalizedLimit, normalizedOffset, err := normalizePage(limit, offset)
+	normalizedLimit, normalizedOffset, err := validatePage(limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +175,7 @@ func (s *Service) ListSagas(ctx context.Context, status string, limit int, offse
 	return s.store.List(ctx, &parsedStatus, normalizedLimit, normalizedOffset)
 }
 
-func normalizeContext(rawContext []byte) (map[string]any, error) {
+func parseContext(rawContext []byte) (map[string]any, error) {
 	if len(rawContext) == 0 {
 		return map[string]any{}, nil
 	}
@@ -222,7 +226,7 @@ func generateSagaID() (string, error) {
 	return hex.EncodeToString(buffer), nil
 }
 
-func normalizePage(limit int, offset int) (int, int, error) {
+func validatePage(limit int, offset int) (int, int, error) {
 	if offset < 0 {
 		return 0, 0, ErrInvalidPagination
 	}

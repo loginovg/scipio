@@ -75,8 +75,13 @@ func main() {
 		}
 	}()
 
-	sagaService := service.New(postgresStore, redisLocker, cfg.LockTTL, logger)
-	stepRunner := service.NewStepRunner(
+	sagaService, err := service.New(postgresStore, redisLocker, cfg.LockTTL, logger)
+	if err != nil {
+		logger.Error("failed to initialize saga service", "error", err)
+		os.Exit(1)
+	}
+
+	stepRunner, err := service.NewStepRunner(
 		postgresStore,
 		redisLocker,
 		cfg.LockTTL,
@@ -86,6 +91,10 @@ func main() {
 		nil,
 		logger,
 	)
+	if err != nil {
+		logger.Error("failed to initialize step runner", "error", err)
+		os.Exit(1)
+	}
 
 	runnerCtx, runnerCancel := context.WithCancel(context.Background())
 	runnerDone := make(chan struct{})

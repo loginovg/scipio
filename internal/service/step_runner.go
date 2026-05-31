@@ -17,6 +17,10 @@ type stepQueueStore interface {
 	ClaimNextStep(ctx context.Context, staleAfter time.Duration) (domain.ClaimedSagaStep, bool, error)
 }
 
+var ErrInvalidStepWorkers = errors.New("step workers must be positive")
+var ErrInvalidStepPollInterval = errors.New("step poll interval must be positive")
+var ErrInvalidStepStaleTimeout = errors.New("step stale timeout must be positive")
+
 type StepRunner struct {
 	store        stepQueueStore
 	pollInterval time.Duration
@@ -36,7 +40,20 @@ func NewStepRunner(
 	staleAfter time.Duration,
 	dispatcher stepDispatcher,
 	logger *slog.Logger,
-) *StepRunner {
+) (*StepRunner, error) {
+	if lockTTL <= 0 {
+		return nil, lock.ErrInvalidTTL
+	}
+	if workers <= 0 {
+		return nil, ErrInvalidStepWorkers
+	}
+	if pollInterval <= 0 {
+		return nil, ErrInvalidStepPollInterval
+	}
+	if staleAfter <= 0 {
+		return nil, ErrInvalidStepStaleTimeout
+	}
+
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -46,18 +63,18 @@ func NewStepRunner(
 
 	runner := &StepRunner{
 		store:        store,
-		pollInterval: normalizePollInterval(pollInterval),
-		staleAfter:   normalizeStaleAfter(staleAfter),
+		pollInterval: pollInterval,
+		staleAfter:   staleAfter,
 		dispatcher:   dispatcher,
 		logger:       logger,
 		sagaLocker:   newSagaLocker(locker, lockTTL, logger),
 	}
 
-	runner.pool = workerpool.New[domain.ClaimedSagaStep, struct{}](normalizeWorkers(workers), func(ctx context.Context, step domain.ClaimedSagaStep) (struct{}, error) {
+	runner.pool = workerpool.New[domain.ClaimedSagaStep, struct{}](workers, func(ctx context.Context, step domain.ClaimedSagaStep) (struct{}, error) {
 		return struct{}{}, runner.processClaimedStep(ctx, step)
 	})
 
-	return runner
+	return runner, nil
 }
 
 func (r *StepRunner) Run(ctx context.Context) error {
@@ -209,30 +226,6 @@ func (r *StepRunner) processClaimedStep(ctx context.Context, claimed domain.Clai
 
 		return nil
 	})
-}
-
-func normalizeWorkers(workers int) int {
-	if workers <= 0 {
-		return 1
-	}
-
-	return workers
-}
-
-func normalizePollInterval(pollInterval time.Duration) time.Duration {
-	if pollInterval <= 0 {
-		return 25 * time.Millisecond
-	}
-
-	return pollInterval
-}
-
-func normalizeStaleAfter(staleAfter time.Duration) time.Duration {
-	if staleAfter <= 0 {
-		return 5 * time.Second
-	}
-
-	return staleAfter
 }
 
 func allStepsCompleted(steps []domain.SagaStep) bool {
