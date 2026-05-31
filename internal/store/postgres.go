@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -348,7 +349,9 @@ func replaceSteps(ctx context.Context, writer stepWriter, sagaID string, steps [
 }
 
 func rollbackTx(ctx context.Context, tx pgx.Tx) {
-	_ = tx.Rollback(ctx)
+	if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+		slog.WarnContext(ctx, "rollback failed", "error", err)
+	}
 }
 
 func parseContext(rawContext []byte) (map[string]any, error) {
