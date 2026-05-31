@@ -20,16 +20,16 @@ make run
 
 Environment variables:
 
-- `SCIPIO_GRPC_PORT`
-- `SCIPIO_HTTP_PORT`
-- `SCIPIO_STEP_WORKERS`
-- `SCIPIO_STEP_POLL_INTERVAL`
-- `SCIPIO_STEP_STALE_TIMEOUT`
-- `PG_CONN`
-- `REDIS_CONN`
-- `SCIPIO_LOCK_TTL`
-- `SCIPIO_LOCK_RETRY_INTERVAL`
-- `SCIPIO_MIGRATIONS_PATH`
+- `SCIPIO_GRPC_PORT` (default: `9090`)
+- `SCIPIO_HTTP_PORT` (default: `8080`)
+- `SCIPIO_STEP_WORKERS` (default: `8`)
+- `SCIPIO_STEP_POLL_INTERVAL` (default: `25ms`)
+- `SCIPIO_STEP_STALE_TIMEOUT` (default: `5s`)
+- `PG_CONN` (default: `postgresql://scipio:scipio@127.0.0.1:5432/scipio?sslmode=disable`)
+- `REDIS_CONN` (default: `redis://127.0.0.1:6380/0`)
+- `SCIPIO_LOCK_TTL` (default: `5s`)
+- `SCIPIO_LOCK_RETRY_INTERVAL` (default: `25ms`)
+- `SCIPIO_MIGRATIONS_PATH` (default: `migrations`)
 
 ## API
 

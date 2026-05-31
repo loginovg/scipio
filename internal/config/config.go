@@ -1,14 +1,25 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
-var ErrEnvVarIsAbsent = errors.New("env var is absent or empty")
+const (
+	defaultGRPCPort                 = 9090
+	defaultHTTPPort                 = 8080
+	defaultStepWorkers              = 8
+	defaultStepPollInterval         = 25 * time.Millisecond
+	defaultStepStaleTimeout         = 5 * time.Second
+	defaultLockTTL                  = 5 * time.Second
+	defaultLockRetryInterval        = 25 * time.Millisecond
+	defaultPostgresConnectionString = "postgresql://scipio:scipio@127.0.0.1:5432/scipio?sslmode=disable"
+	defaultRedisConnectionString    = "redis://127.0.0.1:6380/0"
+	defaultMigrationsPath           = "migrations"
+)
 
 type Runtime struct {
 	GRPCPort                 int
@@ -24,63 +35,74 @@ type Runtime struct {
 }
 
 func Load() (Runtime, error) {
-	var err error = nil
-	GRPCPort, err := envOrErr(err, "SCIPIO_GRPC_PORT", 9090)
-	HTTPPort, err := envOrErr(err, "SCIPIO_HTTP_PORT", 8080)
-	StepWorkers, err := envOrErr(err, "SCIPIO_STEP_WORKERS", 8)
-	StepPollInterval, err := envOrErr(err, "SCIPIO_STEP_POLL_INTERVAL", 25*time.Millisecond)
-	StepStaleTimeout, err := envOrErr(err, "SCIPIO_STEP_STALE_TIMEOUT", 5*time.Second)
-	LockTTL, err := envOrErr(err, "SCIPIO_LOCK_TTL", 5*time.Second)
-	LockRetryInterval, err := envOrErr(err, "SCIPIO_LOCK_RETRY_INTERVAL", 25*time.Millisecond)
-	PostgresConnectionString, err := envOrErr(err, "PG_CONN", "postgresql://scipio:scipio@127.0.0.1:5432/scipio?sslmode=disable")
-	RedisConnectionString, err := envOrErr(err, "REDIS_CONN", "redis://127.0.0.1:6380/0")
-	MigrationsPath, err := envOrErr(err, "SCIPIO_MIGRATIONS_PATH", "migrations")
+	grpcPort, err := envVar("SCIPIO_GRPC_PORT", strconv.Atoi, defaultGRPCPort)
+	if err != nil {
+		return Runtime{}, err
+	}
 
+	httpPort, err := envVar("SCIPIO_HTTP_PORT", strconv.Atoi, defaultHTTPPort)
+	if err != nil {
+		return Runtime{}, err
+	}
+
+	stepWorkers, err := envVar("SCIPIO_STEP_WORKERS", strconv.Atoi, defaultStepWorkers)
+	if err != nil {
+		return Runtime{}, err
+	}
+
+	stepPollInterval, err := envVar("SCIPIO_STEP_POLL_INTERVAL", time.ParseDuration, defaultStepPollInterval)
+	if err != nil {
+		return Runtime{}, err
+	}
+
+	stepStaleTimeout, err := envVar("SCIPIO_STEP_STALE_TIMEOUT", time.ParseDuration, defaultStepStaleTimeout)
+	if err != nil {
+		return Runtime{}, err
+	}
+
+	lockTTL, err := envVar("SCIPIO_LOCK_TTL", time.ParseDuration, defaultLockTTL)
+	if err != nil {
+		return Runtime{}, err
+	}
+
+	lockRetryInterval, err := envVar("SCIPIO_LOCK_RETRY_INTERVAL", time.ParseDuration, defaultLockRetryInterval)
+	if err != nil {
+		return Runtime{}, err
+	}
+
+	postgresConnectionString, err := envVar("PG_CONN", asString, defaultPostgresConnectionString)
+	if err != nil {
+		return Runtime{}, err
+	}
+
+	redisConnectionString, err := envVar("REDIS_CONN", asString, defaultRedisConnectionString)
+	if err != nil {
+		return Runtime{}, err
+	}
+
+	migrationsPath, err := envVar("SCIPIO_MIGRATIONS_PATH", asString, defaultMigrationsPath)
 	if err != nil {
 		return Runtime{}, err
 	}
 
 	return Runtime{
-		GRPCPort:                 GRPCPort,
-		HTTPPort:                 HTTPPort,
-		StepWorkers:              StepWorkers,
-		StepPollInterval:         StepPollInterval,
-		StepStaleTimeout:         StepStaleTimeout,
-		LockTTL:                  LockTTL,
-		LockRetryInterval:        LockRetryInterval,
-		PostgresConnectionString: PostgresConnectionString,
-		RedisConnectionString:    RedisConnectionString,
-		MigrationsPath:           MigrationsPath,
+		GRPCPort:                 grpcPort,
+		HTTPPort:                 httpPort,
+		StepWorkers:              stepWorkers,
+		StepPollInterval:         stepPollInterval,
+		StepStaleTimeout:         stepStaleTimeout,
+		LockTTL:                  lockTTL,
+		LockRetryInterval:        lockRetryInterval,
+		PostgresConnectionString: postgresConnectionString,
+		RedisConnectionString:    redisConnectionString,
+		MigrationsPath:           migrationsPath,
 	}, nil
-}
-
-func envOrErr[T any](err error, name string, fallback T) (T, error) {
-	if err != nil {
-		return fallback, err
-	}
-
-	parse := func() any {
-		switch any(fallback).(type) {
-		case int:
-			return strconv.Atoi
-		case time.Duration:
-			return time.ParseDuration
-		case string:
-			return func(str string) (string, error) {
-				return str, nil
-			}
-		default:
-			panic("unsupported environment variable type")
-		}
-	}()
-
-	return envVar(name, parse.(func(string) (T, error)), fallback)
 }
 
 func envVar[T any](name string, parse func(string) (T, error), fallback T) (T, error) {
 	raw := os.Getenv(name)
-	if raw == "" {
-		return fallback, fmt.Errorf("env %s: %w", name, ErrEnvVarIsAbsent)
+	if strings.TrimSpace(raw) == "" {
+		return fallback, nil
 	}
 
 	parsed, err := parse(raw)
@@ -89,4 +111,8 @@ func envVar[T any](name string, parse func(string) (T, error), fallback T) (T, e
 	}
 
 	return parsed, nil
+}
+
+func asString(raw string) (string, error) {
+	return raw, nil
 }
