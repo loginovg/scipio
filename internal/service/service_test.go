@@ -157,7 +157,7 @@ func TestShouldReturnErrInvalidStepGRPCTargetWhenStepTargetIsBlank(t *testing.T)
 	require.ErrorIs(t, err, ErrInvalidStepGRPCTarget)
 }
 
-func TestShouldReturnCompensatedSagaWhenCancelRequested(t *testing.T) {
+func TestShouldReturnErrCompensationNotImplementedWhenCancelRequested(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -170,8 +170,14 @@ func TestShouldReturnCompensatedSagaWhenCancelRequested(t *testing.T) {
 	saga, cancelErr := svc.CancelSaga(context.Background(), sagaID)
 
 	// then
-	require.NoError(t, cancelErr)
-	require.Equal(t, domain.SagaStatusCompensated, saga.Status)
+	require.ErrorIs(t, cancelErr, ErrCompensationNotImplemented)
+	require.Equal(t, domain.Saga{}, saga)
+
+	storedSaga, getErr := svc.GetSaga(context.Background(), sagaID)
+	require.NoError(t, getErr)
+	require.Equal(t, domain.SagaStatusCanceling, storedSaga.Status)
+	require.Len(t, storedSaga.Steps, 1)
+	require.Equal(t, domain.SagaStepStatusPending, storedSaga.Steps[0].Status)
 }
 
 func TestShouldFilterSagasByStatusWhenStatusFilterProvided(t *testing.T) {
@@ -188,10 +194,10 @@ func TestShouldFilterSagasByStatusWhenStatusFilterProvided(t *testing.T) {
 
 	// when
 	_, cancelErr := svc.CancelSaga(context.Background(), secondID)
-	require.NoError(t, cancelErr)
+	require.ErrorIs(t, cancelErr, ErrCompensationNotImplemented)
 
 	require.Eventually(t, func() bool {
-		sagas, listErr := svc.ListSagas(context.Background(), string(domain.SagaStatusCompensated), 50, 0)
+		sagas, listErr := svc.ListSagas(context.Background(), string(domain.SagaStatusCanceling), 50, 0)
 		if listErr != nil {
 			return false
 		}
@@ -293,18 +299,18 @@ func TestShouldReturnLockErrorWhenSagaLockAcquisitionFailsDuringCancel(t *testin
 	require.ErrorIs(t, cancelErr, lockErr)
 }
 
-func TestShouldReturnCompensationErrorWhenCompensationUpdateFailsDuringCancel(t *testing.T) {
+func TestShouldReturnCancelUpdateErrorWhenCancelUpdateFailsDuringCancel(t *testing.T) {
 	t.Parallel()
 
 	// given
-	compensationErr := errors.New("compensation failed")
+	cancelUpdateErr := errors.New("cancel update failed")
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	storeWithFailedSecondUpdate := &failingUpdateStore{
+	storeWithFailedCancelUpdate := &failingUpdateStore{
 		inner:        store.NewMemory(),
-		failAtUpdate: 2,
-		err:          compensationErr,
+		failAtUpdate: 1,
+		err:          cancelUpdateErr,
 	}
-	svc := New(storeWithFailedSecondUpdate, lock.NewNoop(), time.Second, logger)
+	svc := New(storeWithFailedCancelUpdate, lock.NewNoop(), time.Second, logger)
 
 	sagaID, err := svc.StartSaga(context.Background(), "order_flow", []byte(`{}`), startSteps("order_flow"))
 	require.NoError(t, err)
@@ -313,7 +319,7 @@ func TestShouldReturnCompensationErrorWhenCompensationUpdateFailsDuringCancel(t 
 	_, cancelErr := svc.CancelSaga(context.Background(), sagaID)
 
 	// then
-	require.ErrorIs(t, cancelErr, compensationErr)
+	require.ErrorIs(t, cancelErr, cancelUpdateErr)
 }
 
 func TestShouldReturnErrStoreNotConfiguredWhenStoreIsNil(t *testing.T) {

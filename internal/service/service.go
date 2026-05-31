@@ -24,6 +24,7 @@ var ErrInvalidStepGRPCTarget = errors.New("step grpc target must not be empty")
 var ErrInvalidStatusFilter = errors.New("invalid status filter")
 var ErrInvalidPagination = errors.New("invalid pagination")
 var ErrStoreNotConfigured = errors.New("saga store is not configured")
+var ErrCompensationNotImplemented = errors.New("saga compensation is not implemented")
 
 const (
 	defaultPageLimit = 50
@@ -138,21 +139,8 @@ func (s *Service) CancelSaga(ctx context.Context, sagaID string) (domain.Saga, e
 			return nil
 		}
 
-		compensatedSaga, compensateErr := s.store.Update(lockCtx, sagaID, func(candidate *domain.Saga) error {
-			compensateSagaSteps(candidate)
-			if statemachine.CanTransition(candidate.Status, domain.SagaStatusCompensated) {
-				candidate.Status = domain.SagaStatusCompensated
-			}
-
-			return nil
-		})
-		if compensateErr != nil {
-			s.sagaLocker.logger.ErrorContext(lockCtx, "failed to compensate canceled saga", "saga_id", sagaID, "error", compensateErr)
-			return compensateErr
-		}
-
-		saga = compensatedSaga
-		return nil
+		// TODO: implement backward compensation later
+		return ErrCompensationNotImplemented
 	}); err != nil {
 		return domain.Saga{}, err
 	}
@@ -252,19 +240,4 @@ func normalizePage(limit int, offset int) (int, int, error) {
 	}
 
 	return limit, offset, nil
-}
-
-func compensateSagaSteps(saga *domain.Saga) {
-	now := time.Now().UTC()
-	for index := range saga.Steps {
-		step := &saga.Steps[index]
-		switch step.Status {
-		case domain.SagaStepStatusCompleted, domain.SagaStepStatusCompensated, domain.SagaStepStatusFailed:
-			continue
-		default:
-			step.Status = domain.SagaStepStatusCompensated
-			step.FinishedAt = &now
-			step.Error = ""
-		}
-	}
 }

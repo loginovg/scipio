@@ -15,18 +15,20 @@ def test_should_create_and_complete_saga_when_start_request_is_valid(scipio_clus
     assert saga["context"]["user_id"] == 10
 
 
-def test_should_return_compensated_saga_when_cancel_requested(scipio_cluster, start_saga, cancel_saga):
+def test_should_return_canceling_saga_when_cancel_requested_and_compensation_is_not_implemented(scipio_cluster, start_saga, cancel_saga, wait_for_status):
     # given
     session, first_base_url, _, _ = scipio_cluster
     saga_id = start_saga(session, first_base_url, "cancel_flow", {"ref": "abc"})
 
     # when
     response = cancel_saga(session, first_base_url, saga_id)
+    saga = wait_for_status(session, first_base_url, saga_id, "CANCELING")
 
     # then
-    assert response.status_code == 202
+    assert response.status_code == 500
     body = response.json()
-    assert body["saga"]["status"] == "COMPENSATED"
+    assert body["error"] == "saga compensation is not implemented"
+    assert saga["status"] == "CANCELING"
 
 
 def test_should_filter_sagas_when_status_query_is_provided(scipio_cluster, start_saga, wait_for_status, cancel_saga):
@@ -36,9 +38,10 @@ def test_should_filter_sagas_when_status_query_is_provided(scipio_cluster, start
     second_saga_id = start_saga(session, first_base_url, "filter_flow", {"kind": "second"})
 
     # when
-    cancel_saga(session, first_base_url, second_saga_id)
+    cancel_response = cancel_saga(session, first_base_url, second_saga_id)
+    assert cancel_response.status_code == 500
     wait_for_status(session, first_base_url, first_saga_id, "COMPLETED")
-    response = session.get(f"{first_base_url}/sagas", params={"status": "COMPENSATED"}, timeout=3)
+    response = session.get(f"{first_base_url}/sagas", params={"status": "CANCELING"}, timeout=3)
 
     # then
     assert response.status_code == 200
@@ -108,11 +111,11 @@ def test_should_handle_concurrent_cancellation_from_multiple_instances_when_lock
             executor.submit(cancel_saga, session, second_base_url, saga_id),
         ]
         responses = [future.result().status_code for future in futures]
-    saga = wait_for_status(session, first_base_url, saga_id, "COMPENSATED")
+    saga = wait_for_status(session, first_base_url, saga_id, "CANCELING")
 
     # then
-    assert responses == [202, 202]
-    assert saga["status"] == "COMPENSATED"
+    assert responses == [500, 500]
+    assert saga["status"] == "CANCELING"
 
 
 def test_should_persist_saga_in_postgres_when_saga_is_started(

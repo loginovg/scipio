@@ -146,27 +146,10 @@ func (r *StepRunner) processClaimedStep(ctx context.Context, claimed domain.Clai
 
 		step := saga.Steps[claimed.StepIndex]
 		switch saga.Status {
-		case domain.SagaStatusCanceling, domain.SagaStatusCompensated, domain.SagaStatusFailed:
-			_, updateErr := r.store.Update(lockCtx, claimed.SagaID, func(candidate *domain.Saga) error {
-				if claimed.StepIndex < 0 || claimed.StepIndex >= len(candidate.Steps) {
-					return nil
-				}
-
-				candidateStep := &candidate.Steps[claimed.StepIndex]
-				if candidateStep.Status == domain.SagaStepStatusPending || candidateStep.Status == domain.SagaStepStatusRunning {
-					now := time.Now().UTC()
-					candidateStep.Status = domain.SagaStepStatusCompensated
-					candidateStep.FinishedAt = &now
-					candidateStep.Error = ""
-				}
-
-				if statemachine.CanTransition(candidate.Status, domain.SagaStatusCompensated) {
-					candidate.Status = domain.SagaStatusCompensated
-				}
-
-				return nil
-			})
-			return updateErr
+		case domain.SagaStatusCanceling:
+			return ErrCompensationNotImplemented
+		case domain.SagaStatusCompensated, domain.SagaStatusFailed:
+			return nil
 		}
 
 		if step.Status != domain.SagaStepStatusPending && step.Status != domain.SagaStepStatusRunning {

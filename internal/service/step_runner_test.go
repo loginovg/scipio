@@ -243,6 +243,46 @@ func TestShouldReturnErrStoreNotConfiguredWhenStepRunnerStoreIsNil(t *testing.T)
 	require.ErrorIs(t, err, ErrStoreNotConfigured)
 }
 
+func TestShouldReturnErrCompensationNotImplementedWhenRunnerProcessesCancelingSaga(t *testing.T) {
+	t.Parallel()
+
+	queueStore := newMemoryStepQueueStore()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	now := time.Now().UTC()
+	createErr := queueStore.Create(context.Background(), domain.Saga{
+		ID:       "saga-canceling-step",
+		Workflow: "cancel_flow",
+		Status:   domain.SagaStatusCanceling,
+		Context:  map[string]any{},
+		Steps: []domain.SagaStep{{
+			Name:       "cancel_flow",
+			GRPCTarget: "billing:9000",
+			Status:     domain.SagaStepStatusRunning,
+			Attempt:    1,
+			StartedAt:  &now,
+		}},
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	require.NoError(t, createErr)
+
+	runner := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, nil, logger)
+
+	err := runner.processClaimedStep(context.Background(), domain.ClaimedSagaStep{
+		SagaID:    "saga-canceling-step",
+		StepIndex: 0,
+		Name:      "cancel_flow",
+		Attempt:   1,
+	})
+	require.ErrorIs(t, err, ErrCompensationNotImplemented)
+
+	saga, getErr := queueStore.Get(context.Background(), "saga-canceling-step")
+	require.NoError(t, getErr)
+	require.Equal(t, domain.SagaStatusCanceling, saga.Status)
+	require.Len(t, saga.Steps, 1)
+	require.Equal(t, domain.SagaStepStatusRunning, saga.Steps[0].Status)
+}
+
 func TestShouldPanicWhenLockTTLIsNotPositiveInStepRunnerConstructor(t *testing.T) {
 	t.Parallel()
 
