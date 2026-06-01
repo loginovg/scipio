@@ -62,7 +62,6 @@ func TestShouldReturnContextDeadlineExceededWhenShutdownDeadlineExpiresBeforeWor
 			errCh <- p.Shutdown(ctx)
 		}()
 
-		time.Sleep(time.Nanosecond)
 		synctest.Wait()
 
 		err := <-errCh

@@ -49,20 +49,32 @@ func New[T any, R any](workers int, handler func(context.Context, T) (R, error))
 
 func (p *Pool[T, R]) worker() {
 	defer p.wg.Done()
-	for task := range p.tasks {
-		v, err := p.handler(p.ctx, task)
-		p.results <- Result[R]{Value: v, Err: err}
+	for {
+		select {
+		case <-p.done:
+			p.drainTasks()
+			return
+		case task := <-p.tasks:
+			v, err := p.handler(p.ctx, task)
+			p.results <- Result[R]{Value: v, Err: err}
+		}
+	}
+
+}
+
+func (p *Pool[T, R]) drainTasks() {
+	for {
+		select {
+		case task := <-p.tasks:
+			v, err := p.handler(p.ctx, task)
+			p.results <- Result[R]{Value: v, Err: err}
+		default:
+			return
+		}
 	}
 }
 
-func (p *Pool[T, R]) Submit(ctx context.Context, task T) (err error) {
-	defer func() {
-		r := recover()
-		if r != nil {
-			err = ErrPoolClosed
-		}
-	}()
-
+func (p *Pool[T, R]) Submit(ctx context.Context, task T) error {
 	select {
 	case <-p.done:
 		return ErrPoolClosed
@@ -86,7 +98,6 @@ func (p *Pool[T, R]) Results() <-chan Result[R] {
 func (p *Pool[T, R]) Shutdown(ctx context.Context) error {
 	p.closeOnce.Do(func() {
 		close(p.done)
-		close(p.tasks)
 
 		go func() {
 			p.wg.Wait()
