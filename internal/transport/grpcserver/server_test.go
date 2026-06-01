@@ -44,6 +44,16 @@ func TestShouldReturnAbortedStatusWhenMappingSagaLockContendedError(t *testing.T
 	require.Equal(t, codes.Aborted, grpcStatus.Code())
 }
 
+func TestShouldReturnFailedPreconditionStatusWhenMappingSagaCancelNotAllowedError(t *testing.T) {
+	t.Parallel()
+
+	err := mapError(service.ErrSagaCancelNotAllowed)
+
+	grpcStatus, ok := status.FromError(err)
+	require.True(t, ok)
+	require.Equal(t, codes.FailedPrecondition, grpcStatus.Code())
+}
+
 func TestShouldReturnInternalStatusWithGenericMessageWhenMappingUnexpectedError(t *testing.T) {
 	t.Parallel()
 

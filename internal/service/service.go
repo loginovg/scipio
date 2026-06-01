@@ -27,6 +27,7 @@ var ErrStoreNotConfigured = errors.New("saga store is not configured")
 var ErrCompensationNotImplemented = errors.New("saga compensation is not implemented")
 var ErrSagaNotFound = errors.New("saga not found")
 var ErrSagaLockContended = errors.New("saga lock is contended")
+var ErrSagaCancelNotAllowed = errors.New("saga cannot be canceled from current status")
 
 const (
 	defaultPageLimit = 50
@@ -143,8 +144,10 @@ func (s *Service) CancelSaga(ctx context.Context, sagaID string) (domain.Saga, e
 				if statemachine.CanTransition(candidate.Status, domain.SagaStatusCanceling) {
 					candidate.Status = domain.SagaStatusCanceling
 				}
-			case domain.SagaStatusCanceling, domain.SagaStatusCompensated, domain.SagaStatusFailed:
+			case domain.SagaStatusCanceling, domain.SagaStatusCompensated:
 				return nil
+			case domain.SagaStatusFailed:
+				return ErrSagaCancelNotAllowed
 			default:
 				return nil
 			}

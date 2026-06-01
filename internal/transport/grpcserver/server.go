@@ -68,6 +68,8 @@ func mapError(err error) error {
 		return status.Error(codes.NotFound, err.Error())
 	case errors.Is(err, service.ErrSagaLockContended):
 		return status.Error(codes.Aborted, err.Error())
+	case errors.Is(err, service.ErrSagaCancelNotAllowed):
+		return status.Error(codes.FailedPrecondition, err.Error())
 	case errors.Is(err, service.ErrInvalidWorkflow),
 		errors.Is(err, service.ErrInvalidContext),
 		errors.Is(err, service.ErrStepsRequired),

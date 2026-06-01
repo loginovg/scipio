@@ -135,7 +135,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "409":
-          description: Saga is busy
+          description: Cancellation is not allowed in current saga state or saga is busy
           content:
             application/json:
               schema:

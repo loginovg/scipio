@@ -264,6 +264,46 @@ func TestShouldReturnErrCompensationNotImplementedWhenCancelRequestedForRunningS
 	require.NotNil(t, storedSaga.Steps[0].StartedAt)
 }
 
+func TestShouldReturnErrSagaCancelNotAllowedWhenCancelRequestedForFailedSaga(t *testing.T) {
+	t.Parallel()
+
+	memoryStore := store.NewMemory()
+	svc, newErr := New(memoryStore, lock.NewNoop(), time.Second)
+	require.NoError(t, newErr)
+
+	now := time.Now().UTC()
+	createErr := memoryStore.Create(context.Background(), domain.Saga{
+		ID:       "failed-saga",
+		Workflow: "order_flow",
+		Status:   domain.SagaStatusFailed,
+		Context:  map[string]any{"ref": "failed"},
+		Steps: []domain.SagaStep{
+			{
+				Name:       "order_flow",
+				GRPCTarget: "127.0.0.1:9100",
+				Status:     domain.SagaStepStatusFailed,
+				Attempt:    1,
+				Error:      "step failed",
+			},
+		},
+		CreatedAt: now.Add(-time.Minute),
+		UpdatedAt: now.Add(-time.Minute),
+	})
+	require.NoError(t, createErr)
+
+	saga, cancelErr := svc.CancelSaga(context.Background(), "failed-saga")
+
+	require.ErrorIs(t, cancelErr, ErrSagaCancelNotAllowed)
+	require.Equal(t, domain.Saga{}, saga)
+
+	storedSaga, getErr := memoryStore.Get(context.Background(), "failed-saga")
+	require.NoError(t, getErr)
+	require.Equal(t, domain.SagaStatusFailed, storedSaga.Status)
+	require.Len(t, storedSaga.Steps, 1)
+	require.Equal(t, domain.SagaStepStatusFailed, storedSaga.Steps[0].Status)
+	require.Equal(t, "step failed", storedSaga.Steps[0].Error)
+}
+
 func TestShouldFilterSagasByStatusWhenStatusFilterProvided(t *testing.T) {
 	t.Parallel()
 

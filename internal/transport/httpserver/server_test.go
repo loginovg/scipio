@@ -63,6 +63,23 @@ func TestShouldReturn409WhenCancelSagaReturnsLockContended(t *testing.T) {
 	require.Equal(t, service.ErrSagaLockContended.Error(), conflictResponse.Error)
 }
 
+func TestShouldReturn409WhenCancelSagaReturnsCancelNotAllowed(t *testing.T) {
+	t.Parallel()
+
+	srv := New(&stubSagaService{
+		cancelSagaFn: func(context.Context, string) (domain.Saga, error) {
+			return domain.Saga{}, service.ErrSagaCancelNotAllowed
+		},
+	})
+
+	response, err := srv.CancelSaga(context.Background(), openapi.CancelSagaRequestObject{Id: "failed"})
+
+	require.NoError(t, err)
+	conflictResponse, ok := response.(openapi.CancelSaga409JSONResponse)
+	require.True(t, ok)
+	require.Equal(t, service.ErrSagaCancelNotAllowed.Error(), conflictResponse.Error)
+}
+
 func TestShouldPassIdempotencyKeyWhenStartSagaRequestContainsIdempotencyKey(t *testing.T) {
 	t.Parallel()
 
