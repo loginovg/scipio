@@ -30,10 +30,16 @@ import (
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
+	if err := run(); err != nil {
+		slog.Error("failed to run scipio", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	cfg, err := config.Load()
 	if err != nil {
-		slog.Error("failed to parse config", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to parse config: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -41,34 +47,29 @@ func main() {
 
 	postgresStore, err := store.NewPostgres(ctx, cfg.PostgresConnectionString)
 	if err != nil {
-		slog.Error("failed to initialize postgres store", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to initialize postgres store: %w", err)
 	}
 	defer postgresStore.Close()
 
 	migrationFiles, err := loadMigrationFiles(cfg.MigrationsPath)
 	if err != nil {
-		slog.Error("failed to load migrations", "path", cfg.MigrationsPath, "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to load migrations from %q: %w", cfg.MigrationsPath, err)
 	}
 
 	for _, migrationFile := range migrationFiles {
 		migrationSQL, readErr := os.ReadFile(migrationFile)
 		if readErr != nil {
-			slog.Error("failed to read migration file", "path", migrationFile, "error", readErr)
-			os.Exit(1)
+			return fmt.Errorf("failed to read migration file %q: %w", migrationFile, readErr)
 		}
 
 		if migrateErr := postgresStore.Migrate(ctx, string(migrationSQL)); migrateErr != nil {
-			slog.Error("failed to apply migration", "path", migrationFile, "error", migrateErr)
-			os.Exit(1)
+			return fmt.Errorf("failed to apply migration %q: %w", migrationFile, migrateErr)
 		}
 	}
 
 	redisLocker, err := lock.NewRedisFromURL(cfg.RedisConnectionString, "scipio:lock:saga:", cfg.LockRetryInterval)
 	if err != nil {
-		slog.Error("failed to initialize redis lock", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to initialize redis lock: %w", err)
 	}
 	defer func() {
 		if closeErr := redisLocker.Close(); closeErr != nil {
@@ -78,8 +79,7 @@ func main() {
 
 	sagaService, err := service.New(postgresStore, redisLocker, cfg.LockTTL)
 	if err != nil {
-		slog.Error("failed to initialize saga service", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to initialize saga service: %w", err)
 	}
 
 	stepRunner, err := service.NewStepRunner(
@@ -92,11 +92,11 @@ func main() {
 		nil,
 	)
 	if err != nil {
-		slog.Error("failed to initialize step runner", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to initialize step runner: %w", err)
 	}
 
 	runnerCtx, runnerCancel := context.WithCancel(context.Background())
+	defer runnerCancel()
 	runnerDone := make(chan struct{})
 	go func() {
 		defer close(runnerDone)
@@ -107,8 +107,7 @@ func main() {
 
 	grpcListen, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GRPCPort))
 	if err != nil {
-		slog.Error("failed to listen for grpc", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to listen for grpc: %w", err)
 	}
 
 	grpcSrv := grpc.NewServer()
@@ -116,8 +115,7 @@ func main() {
 
 	httpHandler, err := httpserver.New(sagaService).Handler()
 	if err != nil {
-		slog.Error("failed to configure http server", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to configure http server: %w", err)
 	}
 
 	httpSrv := &http.Server{
@@ -163,6 +161,8 @@ func main() {
 	if shutdownErr := httpSrv.Shutdown(shutdownCtx); shutdownErr != nil {
 		slog.Error("failed to shutdown http server", "error", shutdownErr)
 	}
+
+	return nil
 }
 
 func loadMigrationFiles(path string) ([]string, error) {
