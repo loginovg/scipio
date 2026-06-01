@@ -142,7 +142,7 @@ func (p *Postgres) Get(ctx context.Context, id string) (domain.Saga, error) {
 
 func (p *Postgres) List(ctx context.Context, status *domain.SagaStatus, limit int, offset int) ([]domain.Saga, error) {
 	if limit < 0 || offset < 0 {
-		return nil, errors.New("invalid pagination")
+		return nil, ErrInvalidPagination
 	}
 
 	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{

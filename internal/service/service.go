@@ -199,6 +199,9 @@ func mapStoreError(err error) error {
 	if errors.Is(err, lock.ErrLockContended) {
 		return ErrSagaLockContended
 	}
+	if errors.Is(err, store.ErrInvalidPagination) {
+		return ErrInvalidPagination
+	}
 
 	return err
 }

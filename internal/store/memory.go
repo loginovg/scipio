@@ -12,6 +12,7 @@ import (
 
 var ErrNotFound = errors.New("saga not found")
 var ErrAlreadyExists = errors.New("saga already exists")
+var ErrInvalidPagination = errors.New("invalid pagination")
 
 type Memory struct {
 	mu    sync.RWMutex
@@ -69,7 +70,7 @@ func (m *Memory) List(ctx context.Context, status *domain.SagaStatus, limit int,
 	}
 
 	if limit < 0 || offset < 0 {
-		return nil, errors.New("invalid pagination")
+		return nil, ErrInvalidPagination
 	}
 
 	m.mu.RLock()
