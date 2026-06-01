@@ -8,6 +8,7 @@ GO_CACHE ?= $(CURDIR)/.cache/go-build
 GOLANGCI_LINT_CACHE_DIR ?= $(CURDIR)/.cache/golangci-lint
 TESTSUITE_VENV ?= $(CURDIR)/.testsuite-venv
 TESTSUITE_PYTHON := $(TESTSUITE_VENV)/bin/python
+TESTSUITE_DEPS_STAMP := $(TESTSUITE_VENV)/.deps.stamp
 COMPOSE ?= docker compose
 PROTOC_GEN_GO_VERSION ?= v1.36.11
 PROTOC_GEN_GO_GRPC_VERSION ?= v1.6.2
@@ -64,9 +65,14 @@ test-race:
 	mkdir -p $(GO_CACHE)
 	GOCACHE=$(GO_CACHE) go test -count=1 -race -tags test_dep ./...
 
-testsuite-deps:
+testsuite-deps: $(TESTSUITE_DEPS_STAMP)
+
+$(TESTSUITE_PYTHON):
 	python3 -m venv $(TESTSUITE_VENV)
+
+$(TESTSUITE_DEPS_STAMP): testsuite/requirements.txt | $(TESTSUITE_PYTHON)
 	$(TESTSUITE_PYTHON) -m pip install -r testsuite/requirements.txt
+	touch $(TESTSUITE_DEPS_STAMP)
 
 testsuite: testsuite-deps
 	$(TESTSUITE_PYTHON) -m pytest testsuite
@@ -121,6 +127,6 @@ codegen: tools clean-gen
 	$(SQLC) generate
 
 clean-gen:
-	rm -f $(PROTO_OUT_DIR)/saga.pb.go $(PROTO_OUT_DIR)/saga_grpc.pb.go $(PROTO_OUT_DIR)/saga.pb $(OPENAPI_OUT_DIR)/saga.gen.go $(OPENAPI_OUT_DIR)/saga.openapi.yaml
+	rm -f $(PROTO_OUT_DIR)/*.pb.go $(PROTO_OUT_DIR)/*.pb $(OPENAPI_OUT_DIR)/*.gen.go $(OPENAPI_OUT_DIR)/*.openapi.yaml
 
 ci: lint tests testsuite
