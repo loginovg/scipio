@@ -12,10 +12,11 @@ Scipio is a lightweight Saga orchestrator with gRPC and HTTP interfaces.
 - HTTP API from `api/openapi/saga.yaml`
 - Multi-instance safe coordination by saga ID
 
-## Run
+## Local Run
 
 ```bash
-make run
+cp .env.dist .env
+make dev
 ```
 
 Environment variables:
@@ -30,6 +31,14 @@ Environment variables:
 - `SCIPIO_LOCK_TTL` (default: `5s`)
 - `SCIPIO_LOCK_RETRY_INTERVAL` (default: `25ms`)
 - `SCIPIO_MIGRATIONS_PATH` (default: `migrations`)
+
+Useful Make targets:
+
+- `make help`
+- `make up`
+- `make down`
+- `make run`
+- `make build`
 
 ## API
 
@@ -59,6 +68,14 @@ Lint:
 
 ```bash
 make lint
+```
+
+Formatting, vet, race:
+
+```bash
+make fmt
+make vet
+make test-race
 ```
 
 Functional tests with pytest and testcontainers:

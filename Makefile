@@ -1,10 +1,14 @@
-.PHONY: lint lint-code tests testsuite testsuite-deps run codegen tools clean-gen ci
+.DEFAULT_GOAL := help
+
+.PHONY: help lint lint-code fmt vet tests test-race testsuite testsuite-deps run build up down dev codegen tools clean-gen ci
 
 TOOLS_BIN := $(CURDIR)/.bin
+APP_BIN := $(TOOLS_BIN)/scipio
 GO_CACHE ?= $(CURDIR)/.cache/go-build
 GOLANGCI_LINT_CACHE_DIR ?= $(CURDIR)/.cache/golangci-lint
 TESTSUITE_VENV ?= $(CURDIR)/.testsuite-venv
 TESTSUITE_PYTHON := $(TESTSUITE_VENV)/bin/python
+COMPOSE ?= docker compose
 PROTOC_GEN_GO_VERSION ?= v1.36.11
 PROTOC_GEN_GO_GRPC_VERSION ?= v1.6.2
 OAPI_CODEGEN_VERSION ?= v2.7.0
@@ -21,13 +25,44 @@ OPENAPI_FILE := api/openapi/saga.yaml
 OPENAPI_CONFIG := api/openapi/oapi-codegen.yaml
 OPENAPI_OUT_DIR := gen/openapi
 
+help:
+	@printf "%s\n" \
+		"Available targets:" \
+		"  help           Show this help" \
+		"  up             Start PostgreSQL and Redis via docker compose" \
+		"  down           Stop docker compose services" \
+		"  dev            One-command local start (up + run)" \
+		"  run            Run scipio from source" \
+		"  build          Build binary into .bin/scipio" \
+		"  fmt            Run go fmt" \
+		"  vet            Run go vet" \
+		"  lint           Run golangci-lint" \
+		"  tests          Run go tests with -tags test_dep" \
+		"  test-race      Run go tests with race detector" \
+		"  testsuite      Run Python functional tests" \
+		"  codegen        Regenerate proto/openapi/sqlc artifacts"
+
+fmt:
+	mkdir -p $(GO_CACHE)
+	GOCACHE=$(GO_CACHE) go fmt ./...
+
+vet:
+	mkdir -p $(GO_CACHE)
+	GOCACHE=$(GO_CACHE) go vet ./...
+
 lint:
 	mkdir -p $(GO_CACHE) $(GOLANGCI_LINT_CACHE_DIR)
 	GOCACHE=$(GO_CACHE) GOLANGCI_LINT_CACHE=$(GOLANGCI_LINT_CACHE_DIR) golangci-lint run ./...
 
+lint-code: lint
+
 tests:
 	mkdir -p $(GO_CACHE)
 	GOCACHE=$(GO_CACHE) go test -count=1 -tags test_dep ./...
+
+test-race:
+	mkdir -p $(GO_CACHE)
+	GOCACHE=$(GO_CACHE) go test -count=1 -race -tags test_dep ./...
 
 testsuite-deps:
 	python3 -m venv $(TESTSUITE_VENV)
@@ -38,6 +73,18 @@ testsuite: testsuite-deps
 
 run:
 	go run ./cmd/scipio
+
+build:
+	mkdir -p $(TOOLS_BIN) $(GO_CACHE)
+	GOCACHE=$(GO_CACHE) go build -o $(APP_BIN) ./cmd/scipio
+
+up:
+	$(COMPOSE) up -d postgres redis
+
+down:
+	$(COMPOSE) down --remove-orphans
+
+dev: up run
 
 tools: $(PROTOC_GEN_GO) $(PROTOC_GEN_GO_GRPC) $(OAPI_CODEGEN) $(SQLC)
 
