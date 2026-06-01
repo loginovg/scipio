@@ -21,6 +21,7 @@ type Pool[T any, R any] struct {
 	tasks   chan T
 	results chan Result[R]
 	done    chan struct{}
+	stopped chan struct{}
 
 	closeOnce sync.Once
 	wg        sync.WaitGroup
@@ -35,6 +36,7 @@ func New[T any, R any](workers int, handler func(context.Context, T) (R, error))
 		tasks:   make(chan T, workers),
 		results: make(chan Result[R], workers),
 		done:    make(chan struct{}),
+		stopped: make(chan struct{}),
 	}
 
 	p.wg.Add(workers)
@@ -86,19 +88,19 @@ func (p *Pool[T, R]) Shutdown(ctx context.Context) error {
 		close(p.done)
 		close(p.tasks)
 
-		waited := make(chan struct{})
 		go func() {
 			p.wg.Wait()
 			close(p.results)
 			p.cancel()
-			close(waited)
+			close(p.stopped)
 		}()
 	})
 
 	select {
-	case <-p.done:
+	case <-p.stopped:
 		return nil
 	case <-ctx.Done():
+		p.cancel()
 		return ctx.Err()
 	}
 }
