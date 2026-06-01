@@ -19,6 +19,7 @@ import (
 )
 
 var ErrInvalidPostgresConnectionString = errors.New("postgres connection string must not be empty")
+var ErrInvalidSagaContext = errors.New("saga context must be a non-null JSON object")
 
 type Postgres struct {
 	pool    *pgxpool.Pool
@@ -356,16 +357,16 @@ func rollbackTx(ctx context.Context, tx pgx.Tx) {
 
 func parseContext(rawContext []byte) (map[string]any, error) {
 	if len(rawContext) == 0 {
-		return map[string]any{}, nil
+		return nil, ErrInvalidSagaContext
 	}
 
 	var parsed map[string]any
 	if err := json.Unmarshal(rawContext, &parsed); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrInvalidSagaContext, err)
 	}
 
 	if parsed == nil {
-		return map[string]any{}, nil
+		return nil, ErrInvalidSagaContext
 	}
 
 	return parsed, nil
