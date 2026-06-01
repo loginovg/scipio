@@ -77,13 +77,17 @@ def wait_for_health():
 
 @pytest.fixture(scope="session")
 def start_saga(scipio_cluster):
-    def _start_saga(session, base_url, workflow, context, steps=None):
+    def _start_saga(session, base_url, workflow, context, steps=None, idempotency_key=None):
         if steps is None:
             steps = [{"name": workflow, "grpc_target": scipio_cluster.step_grpc_target}]
 
+        payload = {"workflow": workflow, "context": context, "steps": steps}
+        if idempotency_key is not None:
+            payload["idempotency_key"] = idempotency_key
+
         response = session.post(
             f"{base_url}/sagas",
-            json={"workflow": workflow, "context": context, "steps": steps},
+            json=payload,
             timeout=3,
         )
         assert response.status_code == 202

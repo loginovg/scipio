@@ -173,6 +173,8 @@ components:
       properties:
         workflow:
           type: string
+        idempotency_key:
+          type: string
         context:
           type: object
           additionalProperties: true

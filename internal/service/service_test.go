@@ -100,6 +100,36 @@ func TestShouldCreateConfiguredStepWhenSagaStartsWithSteps(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond)
 }
 
+func TestShouldReturnSameSagaIDWhenStartSagaRetriedWithSameIdempotencyKey(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestService(t)
+
+	firstID, firstErr := svc.StartSagaWithIdempotencyKey(
+		context.Background(),
+		"order_flow",
+		"retry-key-1",
+		[]byte(`{"amount": 42}`),
+		startSteps("order_flow"),
+	)
+	require.NoError(t, firstErr)
+
+	secondID, secondErr := svc.StartSagaWithIdempotencyKey(
+		context.Background(),
+		"order_flow",
+		"retry-key-1",
+		[]byte(`{"amount": 42}`),
+		startSteps("order_flow"),
+	)
+	require.NoError(t, secondErr)
+
+	require.Equal(t, firstID, secondID)
+
+	sagas, listErr := svc.ListSagas(context.Background(), "", 50, 0)
+	require.NoError(t, listErr)
+	require.Len(t, sagas, 1)
+}
+
 func TestShouldReturnErrInvalidWorkflowWhenWorkflowIsBlank(t *testing.T) {
 	t.Parallel()
 

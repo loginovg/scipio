@@ -26,7 +26,7 @@ func New(svc *service.Service) *Server {
 }
 
 func (s *Server) StartSaga(ctx context.Context, req *sagav1.StartSagaRequest) (*sagav1.StartSagaResponse, error) {
-	id, err := s.svc.StartSaga(ctx, req.GetWorkflow(), req.GetContext(), mapStartSagaSteps(req.GetSteps()))
+	id, err := s.svc.StartSagaWithIdempotencyKey(ctx, req.GetWorkflow(), req.GetIdempotencyKey(), req.GetContext(), mapStartSagaSteps(req.GetSteps()))
 	if err != nil {
 		return nil, mapServerError(ctx, "StartSaga", err)
 	}

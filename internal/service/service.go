@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -61,6 +62,10 @@ func New(store sagaStore, locker lock.Locker, lockTTL time.Duration) (*Service, 
 }
 
 func (s *Service) StartSaga(ctx context.Context, workflow string, rawContext []byte, steps []StartSagaStep) (string, error) {
+	return s.StartSagaWithIdempotencyKey(ctx, workflow, "", rawContext, steps)
+}
+
+func (s *Service) StartSagaWithIdempotencyKey(ctx context.Context, workflow string, idempotencyKey string, rawContext []byte, steps []StartSagaStep) (string, error) {
 	if s.store == nil {
 		return "", ErrStoreNotConfigured
 	}
@@ -79,7 +84,8 @@ func (s *Service) StartSaga(ctx context.Context, workflow string, rawContext []b
 		return "", err
 	}
 
-	sagaID, err := generateSagaID()
+	normalizedIdempotencyKey := strings.TrimSpace(idempotencyKey)
+	sagaID, err := generateSagaID(normalizedIdempotencyKey)
 	if err != nil {
 		return "", err
 	}
@@ -96,6 +102,15 @@ func (s *Service) StartSaga(ctx context.Context, workflow string, rawContext []b
 	}
 
 	if createErr := s.store.Create(ctx, saga); createErr != nil {
+		if normalizedIdempotencyKey != "" && errors.Is(createErr, store.ErrAlreadyExists) {
+			existingSaga, getErr := s.store.Get(ctx, sagaID)
+			if getErr != nil {
+				return "", mapStoreError(getErr)
+			}
+
+			return existingSaga.ID, nil
+		}
+
 		return "", createErr
 	}
 
@@ -222,13 +237,22 @@ func validateStartSagaSteps(requested []StartSagaStep) ([]domain.SagaStep, error
 	return steps, nil
 }
 
-func generateSagaID() (string, error) {
+func generateSagaID(idempotencyKey string) (string, error) {
+	if idempotencyKey != "" {
+		return generateSagaIDFromIdempotencyKey(idempotencyKey), nil
+	}
+
 	buffer := make([]byte, 16)
 	if _, err := rand.Read(buffer); err != nil {
 		return "", err
 	}
 
 	return hex.EncodeToString(buffer), nil
+}
+
+func generateSagaIDFromIdempotencyKey(idempotencyKey string) string {
+	hash := sha256.Sum256([]byte(idempotencyKey))
+	return hex.EncodeToString(hash[:16])
 }
 
 func validatePage(limit int, offset int) (int, int, error) {

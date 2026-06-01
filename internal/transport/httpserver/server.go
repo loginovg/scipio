@@ -15,7 +15,7 @@ import (
 )
 
 type sagaService interface {
-	StartSaga(ctx context.Context, workflow string, rawContext []byte, steps []service.StartSagaStep) (string, error)
+	StartSagaWithIdempotencyKey(ctx context.Context, workflow string, idempotencyKey string, rawContext []byte, steps []service.StartSagaStep) (string, error)
 	GetSaga(ctx context.Context, sagaID string) (domain.Saga, error)
 	CancelSaga(ctx context.Context, sagaID string) (domain.Saga, error)
 	ListSagas(ctx context.Context, status string, limit int, offset int) ([]domain.Saga, error)
@@ -62,7 +62,12 @@ func (s *Server) StartSaga(ctx context.Context, request openapi.StartSagaRequest
 		return openapi.StartSaga400JSONResponse{Error: "context must be valid JSON"}, nil
 	}
 
-	sagaID, startErr := s.svc.StartSaga(ctx, request.Body.Workflow, payload, mapStartSagaSteps(request.Body.Steps))
+	idempotencyKey := ""
+	if request.Body.IdempotencyKey != nil {
+		idempotencyKey = *request.Body.IdempotencyKey
+	}
+
+	sagaID, startErr := s.svc.StartSagaWithIdempotencyKey(ctx, request.Body.Workflow, idempotencyKey, payload, mapStartSagaSteps(request.Body.Steps))
 	if startErr != nil {
 		switch {
 		case errors.Is(startErr, service.ErrInvalidWorkflow),

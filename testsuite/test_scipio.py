@@ -84,6 +84,36 @@ def test_should_share_saga_state_between_service_instances_when_using_postgres_s
     assert saga["id"] == saga_id
 
 
+def test_should_return_same_saga_id_when_start_requested_with_same_idempotency_key(
+    scipio_cluster,
+    start_saga,
+    wait_for_status,
+):
+    session, first_base_url, second_base_url, _ = scipio_cluster
+    idempotency_key = uuid.uuid4().hex
+    saga_context = {"source": "testsuite", "value": 42}
+
+    first_saga_id = start_saga(
+        session,
+        first_base_url,
+        "idempotency_flow",
+        saga_context,
+        idempotency_key=idempotency_key,
+    )
+    second_saga_id = start_saga(
+        session,
+        second_base_url,
+        "idempotency_flow",
+        saga_context,
+        idempotency_key=idempotency_key,
+    )
+    saga = wait_for_status(session, first_base_url, first_saga_id, "COMPLETED")
+
+    assert first_saga_id == second_saga_id
+    assert saga["id"] == first_saga_id
+    assert saga["workflow"] == "idempotency_flow"
+
+
 def test_should_dispatch_context_to_step_executor_when_saga_is_started_in_cluster(
     scipio_cluster,
     start_saga,

@@ -41,6 +41,10 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) StartSaga(ctx context.Context, workflow string, sagaContext map[string]any, steps []StartSagaStep) (string, error) {
+	return c.StartSagaWithIdempotencyKey(ctx, workflow, "", sagaContext, steps)
+}
+
+func (c *Client) StartSagaWithIdempotencyKey(ctx context.Context, workflow string, idempotencyKey string, sagaContext map[string]any, steps []StartSagaStep) (string, error) {
 	if sagaContext == nil {
 		sagaContext = map[string]any{}
 	}
@@ -59,9 +63,10 @@ func (c *Client) StartSaga(ctx context.Context, workflow string, sagaContext map
 	}
 
 	response, err := c.sagaClient.StartSaga(ctx, &sagav1.StartSagaRequest{
-		Workflow: workflow,
-		Context:  payload,
-		Steps:    mappedSteps,
+		Workflow:       workflow,
+		Context:        payload,
+		Steps:          mappedSteps,
+		IdempotencyKey: idempotencyKey,
 	})
 	if err != nil {
 		return "", err

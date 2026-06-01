@@ -37,6 +37,7 @@ func TestShouldSendStartSagaRequestWhenClientStartsSaga(t *testing.T) {
 	request := server.startSagaRequestSnapshot()
 	require.NotNil(t, request)
 	require.Equal(t, "order_flow", request.GetWorkflow())
+	require.Equal(t, "", request.GetIdempotencyKey())
 	require.Len(t, request.GetSteps(), 1)
 	require.Equal(t, "charge", request.GetSteps()[0].GetName())
 	require.Equal(t, "billing:9000", request.GetSteps()[0].GetGrpcTarget())
@@ -44,6 +45,28 @@ func TestShouldSendStartSagaRequestWhenClientStartsSaga(t *testing.T) {
 	var parsedContext map[string]any
 	require.NoError(t, json.Unmarshal(request.GetContext(), &parsedContext))
 	require.Equal(t, map[string]any{"amount": float64(42), "currency": "USD"}, parsedContext)
+}
+
+func TestShouldSendIdempotencyKeyWhenClientStartsSagaWithIdempotencyKey(t *testing.T) {
+	t.Parallel()
+
+	client, server := newTestClientAndServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	sagaID, err := client.StartSagaWithIdempotencyKey(
+		ctx,
+		"order_flow",
+		"idempotency-key-1",
+		map[string]any{"amount": 42},
+		[]StartSagaStep{{Name: "charge", GRPCTarget: "billing:9000"}},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "started-saga-id", sagaID)
+
+	request := server.startSagaRequestSnapshot()
+	require.NotNil(t, request)
+	require.Equal(t, "idempotency-key-1", request.GetIdempotencyKey())
 }
 
 func TestShouldSendGetSagaRequestWhenClientGetsSaga(t *testing.T) {
