@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -61,4 +64,89 @@ func TestShouldReturnErrorWhenMigrationDirectoryHasNoSqlFiles(t *testing.T) {
 	// then
 	require.Error(t, err)
 	require.Nil(t, files)
+}
+
+func TestShouldShutdownIngressBeforeRunnerWhenRuntimeStops(t *testing.T) {
+	t.Parallel()
+
+	order := make([]string, 0, 3)
+	mu := sync.Mutex{}
+	runnerDone := make(chan struct{})
+	canceled := false
+
+	grpcSrv := &recordingGRPCStopper{
+		onGracefulStop: func() {
+			mu.Lock()
+			order = append(order, "grpc")
+			mu.Unlock()
+		},
+	}
+	httpSrv := &recordingHTTPShutdowner{
+		onShutdown: func(ctx context.Context) error {
+			require.NotNil(t, ctx)
+			mu.Lock()
+			order = append(order, "http")
+			mu.Unlock()
+			return nil
+		},
+	}
+	runnerCancel := func() {
+		mu.Lock()
+		order = append(order, "runner")
+		canceled = true
+		mu.Unlock()
+		close(runnerDone)
+	}
+
+	shutdownRuntime(grpcSrv, httpSrv, runnerCancel, runnerDone)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.True(t, canceled)
+	require.Equal(t, []string{"grpc", "http", "runner"}, order)
+}
+
+func TestShouldCancelRunnerWhenHTTPShutdownFails(t *testing.T) {
+	t.Parallel()
+
+	runnerDone := make(chan struct{})
+	canceled := false
+	mu := sync.Mutex{}
+
+	grpcSrv := &recordingGRPCStopper{
+		onGracefulStop: func() {},
+	}
+	httpSrv := &recordingHTTPShutdowner{
+		onShutdown: func(context.Context) error {
+			return errors.New("http shutdown failed")
+		},
+	}
+	runnerCancel := func() {
+		mu.Lock()
+		canceled = true
+		mu.Unlock()
+		close(runnerDone)
+	}
+
+	shutdownRuntime(grpcSrv, httpSrv, runnerCancel, runnerDone)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.True(t, canceled)
+}
+
+type recordingGRPCStopper struct {
+	onGracefulStop func()
+}
+
+func (s *recordingGRPCStopper) GracefulStop() {
+	s.onGracefulStop()
+}
+
+type recordingHTTPShutdowner struct {
+	onShutdown func(ctx context.Context) error
+}
+
+func (s *recordingHTTPShutdowner) Shutdown(ctx context.Context) error {
+	return s.onShutdown(ctx)
 }

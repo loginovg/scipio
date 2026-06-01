@@ -27,6 +27,16 @@ import (
 	"google.golang.org/grpc"
 )
 
+const shutdownTimeout = 5 * time.Second
+
+type grpcGracefulStopper interface {
+	GracefulStop()
+}
+
+type httpShutdowner interface {
+	Shutdown(ctx context.Context) error
+}
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
@@ -147,8 +157,19 @@ func run() error {
 		}
 	}
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownRuntime(grpcSrv, httpSrv, runnerCancel, runnerDone)
+
+	return nil
+}
+
+func shutdownRuntime(grpcSrv grpcGracefulStopper, httpSrv httpShutdowner, runnerCancel context.CancelFunc, runnerDone <-chan struct{}) {
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
+
+	grpcSrv.GracefulStop()
+	if shutdownErr := httpSrv.Shutdown(shutdownCtx); shutdownErr != nil {
+		slog.Error("failed to shutdown http server", "error", shutdownErr)
+	}
 
 	runnerCancel()
 	select {
@@ -156,13 +177,6 @@ func run() error {
 	case <-shutdownCtx.Done():
 		slog.Warn("step runner shutdown timed out")
 	}
-
-	grpcSrv.GracefulStop()
-	if shutdownErr := httpSrv.Shutdown(shutdownCtx); shutdownErr != nil {
-		slog.Error("failed to shutdown http server", "error", shutdownErr)
-	}
-
-	return nil
 }
 
 func loadMigrationFiles(path string) ([]string, error) {
