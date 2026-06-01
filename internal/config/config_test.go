@@ -22,7 +22,7 @@ func TestShouldApplyDefaultsWhenEnvironmentVariablesAreAbsent(t *testing.T) {
 		LockRetryInterval:        defaultLockRetryInterval,
 		PostgresConnectionString: defaultPostgresConnectionString,
 		RedisConnectionString:    defaultRedisConnectionString,
-		MigrationsPath:           defaultMigrationsPath,
+		SchemaPath:               defaultSchemaPath,
 	}, cfg)
 }
 
@@ -38,7 +38,7 @@ func TestShouldParseConfiguredValuesWhenEnvironmentVariablesArePresent(t *testin
 	setEnv(t, "SCIPIO_LOCK_RETRY_INTERVAL", "10ms")
 	setEnv(t, "PG_CONN", "postgresql://example")
 	setEnv(t, "REDIS_CONN", "redis://example:6379/2")
-	setEnv(t, "SCIPIO_MIGRATIONS_PATH", "/opt/migrations")
+	setEnv(t, "SCIPIO_SCHEMA_PATH", "/opt/sql/schema/sagas.sql")
 
 	cfg, err := Load()
 	require.NoError(t, err)
@@ -52,7 +52,7 @@ func TestShouldParseConfiguredValuesWhenEnvironmentVariablesArePresent(t *testin
 		LockRetryInterval:        10 * time.Millisecond,
 		PostgresConnectionString: "postgresql://example",
 		RedisConnectionString:    "redis://example:6379/2",
-		MigrationsPath:           "/opt/migrations",
+		SchemaPath:               "/opt/sql/schema/sagas.sql",
 	}, cfg)
 }
 
@@ -83,5 +83,5 @@ func resetConfigEnv(t *testing.T) {
 	setEnv(t, "SCIPIO_LOCK_RETRY_INTERVAL", "")
 	setEnv(t, "PG_CONN", "")
 	setEnv(t, "REDIS_CONN", "")
-	setEnv(t, "SCIPIO_MIGRATIONS_PATH", "")
+	setEnv(t, "SCIPIO_SCHEMA_PATH", "")
 }

@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -66,20 +64,13 @@ func run() error {
 	}
 	defer postgresStore.Close()
 
-	migrationFiles, err := loadMigrationFiles(cfg.MigrationsPath)
+	schemaSQL, err := loadSchemaSQL(cfg.SchemaPath)
 	if err != nil {
-		return fmt.Errorf("failed to load migrations from %q: %w", cfg.MigrationsPath, err)
+		return fmt.Errorf("failed to load schema from %q: %w", cfg.SchemaPath, err)
 	}
 
-	for _, migrationFile := range migrationFiles {
-		migrationSQL, readErr := os.ReadFile(migrationFile)
-		if readErr != nil {
-			return fmt.Errorf("failed to read migration file %q: %w", migrationFile, readErr)
-		}
-
-		if migrateErr := postgresStore.Migrate(ctx, string(migrationSQL)); migrateErr != nil {
-			return fmt.Errorf("failed to apply migration %q: %w", migrationFile, migrateErr)
-		}
+	if err := postgresStore.Migrate(ctx, schemaSQL); err != nil {
+		return fmt.Errorf("failed to apply schema %q: %w", cfg.SchemaPath, err)
 	}
 
 	redisLocker, err := lock.NewRedisFromURL(cfg.RedisConnectionString, "scipio:lock:saga:", cfg.LockRetryInterval)
@@ -218,44 +209,19 @@ func newHTTPServer(port int, handler http.Handler) *http.Server {
 	}
 }
 
-func loadMigrationFiles(path string) ([]string, error) {
-	info, err := os.Stat(path)
+func loadSchemaSQL(path string) (string, error) {
+	if !strings.EqualFold(filepath.Ext(path), ".sql") {
+		return "", fmt.Errorf("schema path is not a sql file: %s", path)
+	}
+
+	schemaSQL, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
-	if !info.IsDir() {
-		if strings.EqualFold(filepath.Ext(path), ".sql") {
-			return []string{path}, nil
-		}
-		return nil, fmt.Errorf("migration path is not a sql file: %s", path)
+	if strings.TrimSpace(string(schemaSQL)) == "" {
+		return "", fmt.Errorf("schema file is empty: %s", path)
 	}
 
-	files := make([]string, 0)
-	walkErr := filepath.WalkDir(path, func(currentPath string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-
-		if entry.IsDir() {
-			return nil
-		}
-
-		if !strings.EqualFold(filepath.Ext(entry.Name()), ".sql") {
-			return nil
-		}
-
-		files = append(files, currentPath)
-		return nil
-	})
-	if walkErr != nil {
-		return nil, walkErr
-	}
-
-	sort.Strings(files)
-	if len(files) == 0 {
-		return nil, fmt.Errorf("no sql migrations found in path: %s", path)
-	}
-
-	return files, nil
+	return string(schemaSQL), nil
 }

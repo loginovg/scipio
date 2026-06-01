@@ -201,7 +201,7 @@ def scipio_cluster(container_base_url, wait_for_health):
             "SCIPIO_STEP_STALE_TIMEOUT": "5s",
             "SCIPIO_LOCK_TTL": "5s",
             "SCIPIO_LOCK_RETRY_INTERVAL": "25ms",
-            "SCIPIO_MIGRATIONS_PATH": "/app/migrations",
+            "SCIPIO_SCHEMA_PATH": "/app/sql/schema/sagas.sql",
             "PG_CONN": "postgresql://scipio:scipio@postgres:5432/scipio?sslmode=disable",
             "REDIS_CONN": "redis://redis:6379/0",
         }

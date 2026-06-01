@@ -34,7 +34,7 @@ func newPostgresClaimNextStepStoreForContract(t *testing.T) claimNextStepStore {
 	require.NoError(t, err)
 	t.Cleanup(postgresStore.Close)
 
-	require.NoError(t, applyPostgresMigrationsForContract(ctx, postgresStore))
+	require.NoError(t, applyPostgresSchemaForContract(ctx, postgresStore))
 	require.NoError(t, clearPostgresDataForContract(ctx, postgresStore))
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -45,27 +45,14 @@ func newPostgresClaimNextStepStoreForContract(t *testing.T) claimNextStepStore {
 	return postgresStore
 }
 
-func applyPostgresMigrationsForContract(ctx context.Context, postgresStore *Postgres) error {
-	migrationFiles, err := filepath.Glob(filepath.Join("..", "..", "migrations", "psql", "V*.sql"))
+func applyPostgresSchemaForContract(ctx context.Context, postgresStore *Postgres) error {
+	schemaFile := filepath.Join("..", "..", "sql", "schema", "sagas.sql")
+	schemaSQL, err := os.ReadFile(schemaFile)
 	if err != nil {
 		return err
 	}
-	if len(migrationFiles) == 0 {
-		return os.ErrNotExist
-	}
 
-	for _, migrationFile := range migrationFiles {
-		migrationSQL, err := os.ReadFile(migrationFile)
-		if err != nil {
-			return err
-		}
-
-		if err := postgresStore.Migrate(ctx, string(migrationSQL)); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return postgresStore.Migrate(ctx, string(schemaSQL))
 }
 
 func clearPostgresDataForContract(ctx context.Context, postgresStore *Postgres) error {

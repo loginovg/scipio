@@ -13,59 +13,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldReturnSortedSqlFilesWhenMigrationPathIsDirectory(t *testing.T) {
+func TestShouldReturnSchemaSQLWhenSchemaPathIsSQLFile(t *testing.T) {
 	t.Parallel()
 
-	// given
 	tempDir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(tempDir, "a"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(tempDir, "b"), 0o755))
+	schemaFile := filepath.Join(tempDir, "schema.sql")
+	require.NoError(t, os.WriteFile(schemaFile, []byte("SELECT 1;"), 0o644))
 
-	firstFile := filepath.Join(tempDir, "a", "V001_init.sql")
-	secondFile := filepath.Join(tempDir, "b", "V002_next.sql")
-	ignoredFile := filepath.Join(tempDir, "b", "README.txt")
+	schemaSQL, err := loadSchemaSQL(schemaFile)
 
-	require.NoError(t, os.WriteFile(firstFile, []byte("SELECT 1;"), 0o644))
-	require.NoError(t, os.WriteFile(secondFile, []byte("SELECT 2;"), 0o644))
-	require.NoError(t, os.WriteFile(ignoredFile, []byte("ignore"), 0o644))
-
-	// when
-	files, err := loadMigrationFiles(tempDir)
-
-	// then
 	require.NoError(t, err)
-	require.Equal(t, []string{firstFile, secondFile}, files)
+	require.Equal(t, "SELECT 1;", schemaSQL)
 }
 
-func TestShouldReturnSingleFileWhenMigrationPathIsSqlFile(t *testing.T) {
+func TestShouldReturnErrorWhenSchemaPathIsDirectory(t *testing.T) {
 	t.Parallel()
 
-	// given
 	tempDir := t.TempDir()
-	migrationFile := filepath.Join(tempDir, "V001_init.sql")
-	require.NoError(t, os.WriteFile(migrationFile, []byte("SELECT 1;"), 0o644))
 
-	// when
-	files, err := loadMigrationFiles(migrationFile)
+	schemaSQL, err := loadSchemaSQL(tempDir)
 
-	// then
-	require.NoError(t, err)
-	require.Equal(t, []string{migrationFile}, files)
-}
-
-func TestShouldReturnErrorWhenMigrationDirectoryHasNoSqlFiles(t *testing.T) {
-	t.Parallel()
-
-	// given
-	tempDir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(tempDir, "note.txt"), []byte("x"), 0o644))
-
-	// when
-	files, err := loadMigrationFiles(tempDir)
-
-	// then
 	require.Error(t, err)
-	require.Nil(t, files)
+	require.Equal(t, "", schemaSQL)
+}
+
+func TestShouldReturnErrorWhenSchemaPathIsNotSQLFile(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	schemaFile := filepath.Join(tempDir, "schema.txt")
+	require.NoError(t, os.WriteFile(schemaFile, []byte("SELECT 1;"), 0o644))
+
+	schemaSQL, err := loadSchemaSQL(schemaFile)
+
+	require.Error(t, err)
+	require.Equal(t, "", schemaSQL)
 }
 
 func TestShouldShutdownIngressBeforeRunnerWhenRuntimeStops(t *testing.T) {
