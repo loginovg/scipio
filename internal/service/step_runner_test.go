@@ -230,6 +230,55 @@ func TestShouldFailSagaWhenStepDispatchReturnsError(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond)
 }
 
+func TestShouldTransitionSagaToFailedWhenCompletingStepAndAnotherStepIsFailed(t *testing.T) {
+	t.Parallel()
+
+	queueStore := store.NewMemory()
+	now := time.Now().UTC()
+	createErr := queueStore.Create(context.Background(), domain.Saga{
+		ID:       "saga-with-failed-step",
+		Workflow: "order_flow",
+		Status:   domain.SagaStatusRunning,
+		Context:  map[string]any{},
+		Steps: []domain.SagaStep{
+			{
+				Name:       "step-0",
+				GRPCTarget: "billing:9000",
+				Status:     domain.SagaStepStatusFailed,
+				Attempt:    1,
+				Error:      "previous failure",
+			},
+			{
+				Name:       "step-1",
+				GRPCTarget: "billing:9000",
+				Status:     domain.SagaStepStatusPending,
+			},
+		},
+		CreatedAt: now.Add(-time.Minute),
+		UpdatedAt: now.Add(-time.Minute),
+	})
+	require.NoError(t, createErr)
+
+	dispatcher := &capturingStepDispatcher{}
+	runner, newRunnerErr := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, dispatcher)
+	require.NoError(t, newRunnerErr)
+
+	processErr := runner.processClaimedStep(context.Background(), domain.ClaimedSagaStep{
+		SagaID:    "saga-with-failed-step",
+		StepIndex: 1,
+		Name:      "step-1",
+		Attempt:   1,
+	})
+	require.NoError(t, processErr)
+
+	saga, getErr := queueStore.Get(context.Background(), "saga-with-failed-step")
+	require.NoError(t, getErr)
+	require.Equal(t, domain.SagaStatusFailed, saga.Status)
+	require.Len(t, saga.Steps, 2)
+	require.Equal(t, domain.SagaStepStatusFailed, saga.Steps[0].Status)
+	require.Equal(t, domain.SagaStepStatusCompleted, saga.Steps[1].Status)
+}
+
 func TestShouldReturnErrStoreNotConfiguredWhenStepRunnerStoreIsNil(t *testing.T) {
 	t.Parallel()
 
