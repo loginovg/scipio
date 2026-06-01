@@ -47,21 +47,6 @@ HTTP endpoints:
 - `POST /sagas/{id}/cancel`
 - `GET /healthz`
 
-## Examples
-
-- gRPC example: `examples/grpc/main.go`
-- HTTP example: `examples/http/main.go`
-
-Run examples after starting Scipio:
-
-```bash
-go run ./examples/grpc
-```
-
-```bash
-go run ./examples/http
-```
-
 ## Testing
 
 Unit tests:
