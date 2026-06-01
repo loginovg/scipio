@@ -104,7 +104,17 @@ func (p *Postgres) Create(ctx context.Context, saga domain.Saga) error {
 }
 
 func (p *Postgres) Get(ctx context.Context, id string) (domain.Saga, error) {
-	sagaRow, err := p.queries.GetSaga(ctx, id)
+	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return domain.Saga{}, err
+	}
+	defer rollbackTx(ctx, tx)
+
+	qtx := p.queries.WithTx(tx)
+	sagaRow, err := qtx.GetSaga(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.Saga{}, ErrNotFound
@@ -117,12 +127,16 @@ func (p *Postgres) Get(ctx context.Context, id string) (domain.Saga, error) {
 		return domain.Saga{}, mapErr
 	}
 
-	steps, stepsErr := fetchSteps(ctx, p.queries, id)
+	steps, stepsErr := fetchSteps(ctx, qtx, id)
 	if stepsErr != nil {
 		return domain.Saga{}, stepsErr
 	}
 
 	saga.Steps = steps
+	if commitErr := tx.Commit(ctx); commitErr != nil {
+		return domain.Saga{}, commitErr
+	}
+
 	return saga, nil
 }
 
@@ -131,17 +145,27 @@ func (p *Postgres) List(ctx context.Context, status *domain.SagaStatus, limit in
 		return nil, errors.New("invalid pagination")
 	}
 
+	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer rollbackTx(ctx, tx)
+
+	qtx := p.queries.WithTx(tx)
+
 	safeLimit := int32(limit)
 	safeOffset := int32(offset)
 
 	var (
 		sagaRows []storesqlc.Saga
-		err      error
 	)
 	if status == nil {
-		sagaRows, err = p.queries.ListSagas(ctx, storesqlc.ListSagasParams{Limit: safeLimit, Offset: safeOffset})
+		sagaRows, err = qtx.ListSagas(ctx, storesqlc.ListSagasParams{Limit: safeLimit, Offset: safeOffset})
 	} else {
-		sagaRows, err = p.queries.ListSagasByStatus(ctx, storesqlc.ListSagasByStatusParams{
+		sagaRows, err = qtx.ListSagasByStatus(ctx, storesqlc.ListSagasByStatusParams{
 			Status: string(*status),
 			Limit:  safeLimit,
 			Offset: safeOffset,
@@ -158,13 +182,17 @@ func (p *Postgres) List(ctx context.Context, status *domain.SagaStatus, limit in
 			return nil, mapErr
 		}
 
-		steps, stepsErr := fetchSteps(ctx, p.queries, saga.ID)
+		steps, stepsErr := fetchSteps(ctx, qtx, saga.ID)
 		if stepsErr != nil {
 			return nil, stepsErr
 		}
 
 		saga.Steps = steps
 		sagas = append(sagas, saga)
+	}
+
+	if commitErr := tx.Commit(ctx); commitErr != nil {
+		return nil, commitErr
 	}
 
 	return sagas, nil
