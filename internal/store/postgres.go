@@ -310,35 +310,60 @@ func mapSagaRow(row sqlc.Saga) (domain.Saga, error) {
 }
 
 func mapStepRows(rows []sqlc.GetSagaStepsRow) ([]domain.SagaStep, error) {
-	return mapRows(rows, func(row sqlc.GetSagaStepsRow) (domain.SagaStep, error) {
-		return mapStepRow(
-			row.Name,
-			row.GrpcTarget,
-			row.Status,
-			row.Attempt,
-			row.StartedAt,
-			row.FinishedAt,
-			row.Error,
-		)
+	return mapStepRowsWith(rows, func(row sqlc.GetSagaStepsRow) stepRowFields {
+		return stepRowFields{
+			name:       row.Name,
+			grpcTarget: row.GrpcTarget,
+			statusRaw:  row.Status,
+			attempt:    row.Attempt,
+			startedAt:  row.StartedAt,
+			finishedAt: row.FinishedAt,
+			errText:    row.Error,
+		}
 	})
 }
 
 func mapStepRowsForUpdate(rows []sqlc.GetSagaStepsForUpdateRow) ([]domain.SagaStep, error) {
-	return mapRows(rows, func(row sqlc.GetSagaStepsForUpdateRow) (domain.SagaStep, error) {
+	return mapStepRowsWith(rows, func(row sqlc.GetSagaStepsForUpdateRow) stepRowFields {
+		return stepRowFields{
+			name:       row.Name,
+			grpcTarget: row.GrpcTarget,
+			statusRaw:  row.Status,
+			attempt:    row.Attempt,
+			startedAt:  row.StartedAt,
+			finishedAt: row.FinishedAt,
+			errText:    row.Error,
+		}
+	})
+}
+
+type stepRowFields struct {
+	name       string
+	grpcTarget string
+	statusRaw  string
+	attempt    int32
+	startedAt  pgtype.Timestamptz
+	finishedAt pgtype.Timestamptz
+	errText    pgtype.Text
+}
+
+func mapStepRowsWith[T any](rows []T, mapFields func(T) stepRowFields) ([]domain.SagaStep, error) {
+	return mapRows(rows, func(row T) (domain.SagaStep, error) {
+		fields := mapFields(row)
 		return mapStepRow(
-			row.Name,
-			row.GrpcTarget,
-			row.Status,
-			row.Attempt,
-			row.StartedAt,
-			row.FinishedAt,
-			row.Error,
+			fields.name,
+			fields.grpcTarget,
+			fields.statusRaw,
+			fields.attempt,
+			fields.startedAt,
+			fields.finishedAt,
+			fields.errText,
 		)
 	})
 }
 
-func mapRows[T any, R any](values []T, mapper func(T) (R, error)) ([]R, error) {
-	mapped := make([]R, 0, len(values))
+func mapRows[T any](values []T, mapper func(T) (domain.SagaStep, error)) ([]domain.SagaStep, error) {
+	mapped := make([]domain.SagaStep, 0, len(values))
 	for _, value := range values {
 		result, err := mapper(value)
 		if err != nil {
