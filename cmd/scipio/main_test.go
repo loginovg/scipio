@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -133,6 +134,22 @@ func TestShouldCancelRunnerWhenHTTPShutdownFails(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	require.True(t, canceled)
+}
+
+func TestShouldConfigureHTTPServerTimeoutsWhenRuntimeBuildsHTTPServer(t *testing.T) {
+	t.Parallel()
+
+	handler := http.NewServeMux()
+
+	server := newHTTPServer(8080, handler)
+
+	require.NotNil(t, server)
+	require.Equal(t, ":8080", server.Addr)
+	require.Equal(t, handler, server.Handler)
+	require.Equal(t, httpReadHeaderTimeout, server.ReadHeaderTimeout)
+	require.Equal(t, httpReadTimeout, server.ReadTimeout)
+	require.Equal(t, httpWriteTimeout, server.WriteTimeout)
+	require.Equal(t, httpIdleTimeout, server.IdleTimeout)
 }
 
 type recordingGRPCStopper struct {

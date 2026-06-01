@@ -28,6 +28,10 @@ import (
 )
 
 const shutdownTimeout = 5 * time.Second
+const httpReadHeaderTimeout = 5 * time.Second
+const httpReadTimeout = 30 * time.Second
+const httpWriteTimeout = 30 * time.Second
+const httpIdleTimeout = 2 * time.Minute
 
 type grpcGracefulStopper interface {
 	GracefulStop()
@@ -128,11 +132,7 @@ func run() error {
 		return fmt.Errorf("failed to configure http server: %w", err)
 	}
 
-	httpSrv := &http.Server{
-		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),
-		Handler:           httpHandler,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
+	httpSrv := newHTTPServer(cfg.HTTPPort, httpHandler)
 
 	errCh := make(chan error, 2)
 	go func() {
@@ -176,6 +176,17 @@ func shutdownRuntime(grpcSrv grpcGracefulStopper, httpSrv httpShutdowner, runner
 	case <-runnerDone:
 	case <-shutdownCtx.Done():
 		slog.Warn("step runner shutdown timed out")
+	}
+}
+
+func newHTTPServer(port int, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              fmt.Sprintf(":%d", port),
+		Handler:           handler,
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		ReadTimeout:       httpReadTimeout,
+		WriteTimeout:      httpWriteTimeout,
+		IdleTimeout:       httpIdleTimeout,
 	}
 }
 
