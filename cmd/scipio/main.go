@@ -35,6 +35,7 @@ const httpIdleTimeout = 2 * time.Minute
 
 type grpcGracefulStopper interface {
 	GracefulStop()
+	Stop()
 }
 
 type httpShutdowner interface {
@@ -163,20 +164,47 @@ func run() error {
 }
 
 func shutdownRuntime(grpcSrv grpcGracefulStopper, httpSrv httpShutdowner, runnerCancel context.CancelFunc, runnerDone <-chan struct{}) {
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer shutdownCancel()
+	shutdownRuntimeWithTimeouts(grpcSrv, httpSrv, runnerCancel, runnerDone, shutdownTimeout, shutdownTimeout, shutdownTimeout)
+}
 
-	grpcSrv.GracefulStop()
-	if shutdownErr := httpSrv.Shutdown(shutdownCtx); shutdownErr != nil {
+func shutdownRuntimeWithTimeouts(
+	grpcSrv grpcGracefulStopper,
+	httpSrv httpShutdowner,
+	runnerCancel context.CancelFunc,
+	runnerDone <-chan struct{},
+	grpcTimeout time.Duration,
+	httpTimeout time.Duration,
+	runnerTimeout time.Duration,
+) {
+	grpcCtx, cancelGRPC := context.WithTimeout(context.Background(), grpcTimeout)
+	grpcDone := make(chan struct{})
+	go func() {
+		defer close(grpcDone)
+		grpcSrv.GracefulStop()
+	}()
+
+	select {
+	case <-grpcDone:
+	case <-grpcCtx.Done():
+		slog.Warn("grpc graceful shutdown timed out")
+		grpcSrv.Stop()
+	}
+	cancelGRPC()
+
+	httpCtx, cancelHTTP := context.WithTimeout(context.Background(), httpTimeout)
+	if shutdownErr := httpSrv.Shutdown(httpCtx); shutdownErr != nil {
 		slog.Error("failed to shutdown http server", "error", shutdownErr)
 	}
+	cancelHTTP()
 
 	runnerCancel()
+	runnerCtx, cancelRunner := context.WithTimeout(context.Background(), runnerTimeout)
 	select {
 	case <-runnerDone:
-	case <-shutdownCtx.Done():
+	case <-runnerCtx.Done():
 		slog.Warn("step runner shutdown timed out")
 	}
+	cancelRunner()
 }
 
 func newHTTPServer(port int, handler http.Handler) *http.Server {

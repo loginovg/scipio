@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -154,10 +155,17 @@ func TestShouldConfigureHTTPServerTimeoutsWhenRuntimeBuildsHTTPServer(t *testing
 
 type recordingGRPCStopper struct {
 	onGracefulStop func()
+	onStop         func()
 }
 
 func (s *recordingGRPCStopper) GracefulStop() {
 	s.onGracefulStop()
+}
+
+func (s *recordingGRPCStopper) Stop() {
+	if s.onStop != nil {
+		s.onStop()
+	}
 }
 
 type recordingHTTPShutdowner struct {
@@ -166,4 +174,51 @@ type recordingHTTPShutdowner struct {
 
 func (s *recordingHTTPShutdowner) Shutdown(ctx context.Context) error {
 	return s.onShutdown(ctx)
+}
+
+func TestShouldForceStopGRPCWhenGracefulStopExceedsTimeout(t *testing.T) {
+	t.Parallel()
+
+	runnerDone := make(chan struct{})
+	runnerCanceled := false
+	mu := sync.Mutex{}
+	unblockGracefulStop := make(chan struct{})
+	stopCalled := make(chan struct{})
+
+	grpcSrv := &recordingGRPCStopper{
+		onGracefulStop: func() {
+			<-unblockGracefulStop
+		},
+		onStop: func() {
+			select {
+			case <-stopCalled:
+			default:
+				close(stopCalled)
+			}
+			close(unblockGracefulStop)
+		},
+	}
+	httpSrv := &recordingHTTPShutdowner{
+		onShutdown: func(context.Context) error {
+			return nil
+		},
+	}
+	runnerCancel := func() {
+		mu.Lock()
+		runnerCanceled = true
+		mu.Unlock()
+		close(runnerDone)
+	}
+
+	shutdownRuntimeWithTimeouts(grpcSrv, httpSrv, runnerCancel, runnerDone, time.Millisecond, time.Second, time.Second)
+
+	select {
+	case <-stopCalled:
+	default:
+		t.Fatal("expected grpc stop to be called")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.True(t, runnerCanceled)
 }
