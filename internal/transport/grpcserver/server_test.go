@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 
+	sagav1 "scipio/gen/proto"
+	"scipio/internal/domain"
 	"scipio/internal/service"
 
 	"google.golang.org/grpc/codes"
@@ -51,4 +53,16 @@ func TestShouldReturnInternalStatusWithGenericMessageWhenMappingUnexpectedError(
 	require.True(t, ok)
 	require.Equal(t, codes.Internal, grpcStatus.Code())
 	require.Equal(t, "internal error", grpcStatus.Message())
+}
+
+func TestShouldReturnUnspecifiedWhenMappingUnknownSagaStatus(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, sagav1.SagaStatus_SAGA_STATUS_UNSPECIFIED, mapSagaStatus(domain.SagaStatus("UNKNOWN_STATUS")))
+}
+
+func TestShouldReturnUnspecifiedWhenMappingUnknownSagaStepStatus(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, sagav1.SagaStepStatus_SAGA_STEP_STATUS_UNSPECIFIED, mapStepStatus(domain.SagaStepStatus("UNKNOWN_STATUS")))
 }
