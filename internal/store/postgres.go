@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"scipio/internal/domain"
-	storesqlc "scipio/internal/store/sqlc"
+	"scipio/internal/store/sqlc"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -23,16 +23,16 @@ var ErrInvalidSagaContext = errors.New("saga context must be a non-null JSON obj
 
 type Postgres struct {
 	pool    *pgxpool.Pool
-	queries *storesqlc.Queries
+	queries *sqlc.Queries
 }
 
 type stepReader interface {
-	GetSagaSteps(ctx context.Context, sagaID string) ([]storesqlc.GetSagaStepsRow, error)
+	GetSagaSteps(ctx context.Context, sagaID string) ([]sqlc.GetSagaStepsRow, error)
 }
 
 type stepWriter interface {
-	DeleteSagaStepsFromIndex(ctx context.Context, arg storesqlc.DeleteSagaStepsFromIndexParams) error
-	UpsertSagaStep(ctx context.Context, arg storesqlc.UpsertSagaStepParams) error
+	DeleteSagaStepsFromIndex(ctx context.Context, arg sqlc.DeleteSagaStepsFromIndexParams) error
+	UpsertSagaStep(ctx context.Context, arg sqlc.UpsertSagaStepParams) error
 }
 
 func NewPostgres(ctx context.Context, connectionString string) (*Postgres, error) {
@@ -51,7 +51,7 @@ func NewPostgres(ctx context.Context, connectionString string) (*Postgres, error
 		return nil, pingErr
 	}
 
-	return &Postgres{pool: pool, queries: storesqlc.New(pool)}, nil
+	return &Postgres{pool: pool, queries: sqlc.New(pool)}, nil
 }
 
 func (p *Postgres) Close() {
@@ -82,7 +82,7 @@ func (p *Postgres) Create(ctx context.Context, saga domain.Saga) error {
 	defer rollbackTx(ctx, tx)
 
 	qtx := p.queries.WithTx(tx)
-	if createErr := qtx.CreateSaga(ctx, storesqlc.CreateSagaParams{
+	if createErr := qtx.CreateSaga(ctx, sqlc.CreateSagaParams{
 		ID:        saga.ID,
 		Workflow:  saga.Workflow,
 		Status:    string(saga.Status),
@@ -160,12 +160,12 @@ func (p *Postgres) List(ctx context.Context, status *domain.SagaStatus, limit in
 	safeOffset := int32(offset)
 
 	var (
-		sagaRows []storesqlc.Saga
+		sagaRows []sqlc.Saga
 	)
 	if status == nil {
-		sagaRows, err = qtx.ListSagas(ctx, storesqlc.ListSagasParams{Limit: safeLimit, Offset: safeOffset})
+		sagaRows, err = qtx.ListSagas(ctx, sqlc.ListSagasParams{Limit: safeLimit, Offset: safeOffset})
 	} else {
-		sagaRows, err = qtx.ListSagasByStatus(ctx, storesqlc.ListSagasByStatusParams{
+		sagaRows, err = qtx.ListSagasByStatus(ctx, sqlc.ListSagasByStatusParams{
 			Status: string(*status),
 			Limit:  safeLimit,
 			Offset: safeOffset,
@@ -239,7 +239,7 @@ func (p *Postgres) Update(ctx context.Context, id string, fn func(*domain.Saga) 
 	}
 
 	saga.UpdatedAt = time.Now().UTC()
-	if updateErr := qtx.UpdateSaga(ctx, storesqlc.UpdateSagaParams{
+	if updateErr := qtx.UpdateSaga(ctx, sqlc.UpdateSagaParams{
 		ID:        saga.ID,
 		Workflow:  saga.Workflow,
 		Status:    string(saga.Status),
@@ -288,7 +288,7 @@ func fetchSteps(ctx context.Context, reader stepReader, sagaID string) ([]domain
 	return mapStepRows(stepRows)
 }
 
-func mapSagaRow(row storesqlc.Saga) (domain.Saga, error) {
+func mapSagaRow(row sqlc.Saga) (domain.Saga, error) {
 	status, statusErr := domain.ParseSagaStatus(row.Status)
 	if statusErr != nil {
 		return domain.Saga{}, fmt.Errorf("unsupported saga status %q", row.Status)
@@ -309,8 +309,8 @@ func mapSagaRow(row storesqlc.Saga) (domain.Saga, error) {
 	}, nil
 }
 
-func mapStepRows(rows []storesqlc.GetSagaStepsRow) ([]domain.SagaStep, error) {
-	return mapRows(rows, func(row storesqlc.GetSagaStepsRow) (domain.SagaStep, error) {
+func mapStepRows(rows []sqlc.GetSagaStepsRow) ([]domain.SagaStep, error) {
+	return mapRows(rows, func(row sqlc.GetSagaStepsRow) (domain.SagaStep, error) {
 		return mapStepRow(
 			row.Name,
 			row.GrpcTarget,
@@ -323,8 +323,8 @@ func mapStepRows(rows []storesqlc.GetSagaStepsRow) ([]domain.SagaStep, error) {
 	})
 }
 
-func mapStepRowsForUpdate(rows []storesqlc.GetSagaStepsForUpdateRow) ([]domain.SagaStep, error) {
-	return mapRows(rows, func(row storesqlc.GetSagaStepsForUpdateRow) (domain.SagaStep, error) {
+func mapStepRowsForUpdate(rows []sqlc.GetSagaStepsForUpdateRow) ([]domain.SagaStep, error) {
+	return mapRows(rows, func(row sqlc.GetSagaStepsForUpdateRow) (domain.SagaStep, error) {
 		return mapStepRow(
 			row.Name,
 			row.GrpcTarget,
@@ -378,7 +378,7 @@ func mapStepRow(
 
 func replaceSteps(ctx context.Context, writer stepWriter, sagaID string, steps []domain.SagaStep) error {
 	for index, step := range steps {
-		if err := writer.UpsertSagaStep(ctx, storesqlc.UpsertSagaStepParams{
+		if err := writer.UpsertSagaStep(ctx, sqlc.UpsertSagaStepParams{
 			SagaID:     sagaID,
 			StepIndex:  int32(index),
 			Name:       step.Name,
@@ -393,7 +393,7 @@ func replaceSteps(ctx context.Context, writer stepWriter, sagaID string, steps [
 		}
 	}
 
-	return writer.DeleteSagaStepsFromIndex(ctx, storesqlc.DeleteSagaStepsFromIndexParams{
+	return writer.DeleteSagaStepsFromIndex(ctx, sqlc.DeleteSagaStepsFromIndexParams{
 		SagaID:    sagaID,
 		StepIndex: int32(len(steps)),
 	})

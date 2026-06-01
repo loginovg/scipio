@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"scipio/internal/domain"
-	storesqlc "scipio/internal/store/sqlc"
+	"scipio/internal/store/sqlc"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -75,7 +75,7 @@ func TestShouldMapStepRowsWhenStatusesAreSupported(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now().UTC()
-	rows := []storesqlc.GetSagaStepsRow{
+	rows := []sqlc.GetSagaStepsRow{
 		{
 			Name:       "charge",
 			GrpcTarget: "billing:9000",
@@ -102,7 +102,7 @@ func TestShouldMapStepRowsForUpdateWhenStatusesAreSupported(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now().UTC()
-	rows := []storesqlc.GetSagaStepsForUpdateRow{
+	rows := []sqlc.GetSagaStepsForUpdateRow{
 		{
 			Name:       "reserve",
 			GrpcTarget: "inventory:9000",
@@ -126,7 +126,7 @@ func TestShouldMapStepRowsForUpdateWhenStatusesAreSupported(t *testing.T) {
 func TestShouldReturnErrorWhenStepRowsContainUnsupportedStatus(t *testing.T) {
 	t.Parallel()
 
-	rows := []storesqlc.GetSagaStepsRow{
+	rows := []sqlc.GetSagaStepsRow{
 		{
 			Name:       "charge",
 			GrpcTarget: "billing:9000",
@@ -143,7 +143,7 @@ func TestShouldReturnErrorWhenStepRowsContainUnsupportedStatus(t *testing.T) {
 func TestShouldReturnErrorWhenStepRowsForUpdateContainUnsupportedStatus(t *testing.T) {
 	t.Parallel()
 
-	rows := []storesqlc.GetSagaStepsForUpdateRow{
+	rows := []sqlc.GetSagaStepsForUpdateRow{
 		{
 			Name:       "reserve",
 			GrpcTarget: "inventory:9000",
@@ -214,7 +214,7 @@ func TestShouldReturnUpsertErrorWhenUpsertSagaStepFailsWhileReplacingSteps(t *te
 	// then
 	require.ErrorIs(t, err, expectedErr)
 	require.Len(t, writer.upserts, 2)
-	require.Equal(t, storesqlc.DeleteSagaStepsFromIndexParams{}, writer.deletedFromIndex)
+	require.Equal(t, sqlc.DeleteSagaStepsFromIndexParams{}, writer.deletedFromIndex)
 }
 
 func TestShouldReturnDeleteErrorWhenDeleteSagaStepsFromIndexFailsWhileReplacingSteps(t *testing.T) {
@@ -240,13 +240,13 @@ func TestShouldReturnDeleteErrorWhenDeleteSagaStepsFromIndexFailsWhileReplacingS
 }
 
 type capturingStepWriter struct {
-	upserts          []storesqlc.UpsertSagaStepParams
+	upserts          []sqlc.UpsertSagaStepParams
 	upsertErrAtIndex map[int]error
-	deletedFromIndex storesqlc.DeleteSagaStepsFromIndexParams
+	deletedFromIndex sqlc.DeleteSagaStepsFromIndexParams
 	deleteErr        error
 }
 
-func (w *capturingStepWriter) UpsertSagaStep(_ context.Context, arg storesqlc.UpsertSagaStepParams) error {
+func (w *capturingStepWriter) UpsertSagaStep(_ context.Context, arg sqlc.UpsertSagaStepParams) error {
 	w.upserts = append(w.upserts, arg)
 	if w.upsertErrAtIndex == nil {
 		return nil
@@ -259,7 +259,7 @@ func (w *capturingStepWriter) UpsertSagaStep(_ context.Context, arg storesqlc.Up
 	return nil
 }
 
-func (w *capturingStepWriter) DeleteSagaStepsFromIndex(_ context.Context, arg storesqlc.DeleteSagaStepsFromIndexParams) error {
+func (w *capturingStepWriter) DeleteSagaStepsFromIndex(_ context.Context, arg sqlc.DeleteSagaStepsFromIndexParams) error {
 	w.deletedFromIndex = arg
 	return w.deleteErr
 }
