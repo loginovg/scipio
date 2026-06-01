@@ -12,6 +12,7 @@ service SagaService {
 
 service SagaStepExecutor {
   rpc ExecuteStep(ExecuteStepRequest) returns (ExecuteStepResponse);
+  rpc CompensateStep(CompensateStepRequest) returns (CompensateStepResponse);
 }
 
 message StartSagaRequest {
@@ -75,6 +76,17 @@ message ExecuteStepRequest {
 }
 
 message ExecuteStepResponse {
+}
+
+message CompensateStepRequest {
+  string saga_id = 1;
+  string workflow = 2;
+  string step_name = 3;
+  uint32 attempt = 4;
+  bytes context = 5;
+}
+
+message CompensateStepResponse {
 }
 
 enum SagaStatus {

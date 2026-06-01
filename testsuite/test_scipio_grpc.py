@@ -85,26 +85,33 @@ def test_should_dispatch_context_to_step_executor_when_grpc_saga_is_started(
     assert calls[0]["context"] == saga_context
 
 
-def test_should_return_internal_error_when_grpc_cancel_is_requested_and_compensation_is_not_implemented(
+def test_should_compensate_saga_when_grpc_cancel_is_requested(
     grpc_targets,
     start_saga_grpc,
     cancel_saga_grpc,
     wait_for_status_grpc,
+    wait_for_step_dispatch,
 ):
     # given
     first_target, _ = grpc_targets
     saga_id = start_saga_grpc(first_target, "grpc_cancel_flow", {"ref": "cancel"})
+    wait_for_status_grpc(first_target, saga_id, "SAGA_STATUS_COMPLETED")
 
     # when
-    with pytest.raises(grpc.RpcError) as err:
-        cancel_saga_grpc(first_target, saga_id)
-
-    saga = wait_for_status_grpc(first_target, saga_id, "SAGA_STATUS_CANCELING")
+    saga = cancel_saga_grpc(first_target, saga_id)
+    compensated = wait_for_status_grpc(first_target, saga_id, "SAGA_STATUS_COMPENSATED")
+    compensation_calls = wait_for_step_dispatch(saga_id, expected_calls=1, operation="compensate")
+    status_name = saga.DESCRIPTOR.fields_by_name["status"].enum_type.values_by_number[saga.status].name
 
     # then
-    assert err.value.code() == grpc.StatusCode.INTERNAL
-    assert err.value.details() == "saga compensation is not implemented"
+    assert status_name in ("SAGA_STATUS_CANCELING", "SAGA_STATUS_COMPENSATED")
     assert saga.id == saga_id
+    assert compensated.id == saga_id
+    assert len(compensation_calls) == 1
+    assert compensation_calls[0]["operation"] == "compensate"
+    assert compensation_calls[0]["workflow"] == "grpc_cancel_flow"
+    assert compensation_calls[0]["step_name"] == "grpc_cancel_flow"
+    assert compensation_calls[0]["context"] == {"ref": "cancel"}
 
 
 def test_should_fail_saga_when_grpc_step_target_is_unreachable(

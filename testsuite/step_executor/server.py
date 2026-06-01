@@ -24,24 +24,36 @@ def load_messages(descriptor_path):
     for file_descriptor in file_descriptor_set.file:
         pool.Add(file_descriptor)
 
-    request_descriptor = pool.FindMessageTypeByName("scipio.saga.v1.ExecuteStepRequest")
-    response_descriptor = pool.FindMessageTypeByName("scipio.saga.v1.ExecuteStepResponse")
-    return (
-        message_factory.GetMessageClass(request_descriptor),
-        message_factory.GetMessageClass(response_descriptor),
+    namespace = "scipio.saga.v1"
+    message_names = (
+        "ExecuteStepRequest",
+        "ExecuteStepResponse",
+        "CompensateStepRequest",
+        "CompensateStepResponse",
     )
+    messages = {}
+    for message_name in message_names:
+        descriptor = pool.FindMessageTypeByName(f"{namespace}.{message_name}")
+        messages[message_name] = message_factory.GetMessageClass(descriptor)
+
+    return messages
 
 
 def main():
-    request_cls, response_cls = load_messages(os.getenv("STEP_EXECUTOR_DESCRIPTOR", "/app/saga.pb"))
+    messages = load_messages(os.getenv("STEP_EXECUTOR_DESCRIPTOR", "/app/saga.pb"))
+    execute_request_cls = messages["ExecuteStepRequest"]
+    execute_response_cls = messages["ExecuteStepResponse"]
+    compensate_request_cls = messages["CompensateStepRequest"]
+    compensate_response_cls = messages["CompensateStepResponse"]
     http_port = int(os.getenv("STEP_EXECUTOR_HTTP_PORT", "18080"))
 
-    def execute_step(request, _context):
+    def record_event(operation, request):
         payload = {}
         if request.context:
             payload = json.loads(request.context.decode("utf-8"))
 
         event = {
+            "operation": operation,
             "saga_id": request.saga_id,
             "workflow": request.workflow,
             "step_name": request.step_name,
@@ -52,7 +64,13 @@ def main():
         with events_lock:
             events.append(event)
 
-        return response_cls()
+    def execute_step(request, _context):
+        record_event("execute", request)
+        return execute_response_cls()
+
+    def compensate_step(request, _context):
+        record_event("compensate", request)
+        return compensate_response_cls()
 
     class CallsHandler(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -102,7 +120,12 @@ def main():
         {
             "ExecuteStep": grpc.unary_unary_rpc_method_handler(
                 execute_step,
-                request_deserializer=request_cls.FromString,
+                request_deserializer=execute_request_cls.FromString,
+                response_serializer=lambda response: response.SerializeToString(),
+            ),
+            "CompensateStep": grpc.unary_unary_rpc_method_handler(
+                compensate_step,
+                request_deserializer=compensate_request_cls.FromString,
                 response_serializer=lambda response: response.SerializeToString(),
             )
         },

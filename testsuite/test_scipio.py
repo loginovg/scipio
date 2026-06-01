@@ -33,20 +33,34 @@ def test_should_create_and_complete_saga_when_start_request_is_valid(scipio_clus
     assert saga["context"]["user_id"] == 10
 
 
-def test_should_return_canceling_saga_when_cancel_requested_and_compensation_is_not_implemented(scipio_cluster, start_saga, cancel_saga, wait_for_status):
+def test_should_compensate_saga_when_http_cancel_is_requested(
+    scipio_cluster,
+    start_saga,
+    cancel_saga,
+    wait_for_status,
+    wait_for_step_dispatch,
+):
     # given
     session, first_base_url, _, _ = scipio_cluster
     saga_id = start_saga(session, first_base_url, "cancel_flow", {"ref": "abc"})
+    wait_for_status(session, first_base_url, saga_id, "COMPLETED")
 
     # when
     response = cancel_saga(session, first_base_url, saga_id)
-    saga = wait_for_status(session, first_base_url, saga_id, "CANCELING")
+    saga = wait_for_status(session, first_base_url, saga_id, "COMPENSATED")
+    compensation_calls = wait_for_step_dispatch(saga_id, expected_calls=1, operation="compensate")
 
     # then
-    assert response.status_code == 500
+    assert response.status_code == 202
     body = response.json()
-    assert body["error"] == "saga compensation is not implemented"
-    assert saga["status"] == "CANCELING"
+    assert body["saga"]["id"] == saga_id
+    assert body["saga"]["status"] in ("CANCELING", "COMPENSATED")
+    assert saga["status"] == "COMPENSATED"
+    assert len(compensation_calls) == 1
+    assert compensation_calls[0]["operation"] == "compensate"
+    assert compensation_calls[0]["workflow"] == "cancel_flow"
+    assert compensation_calls[0]["step_name"] == "cancel_flow"
+    assert compensation_calls[0]["context"] == {"ref": "abc"}
 
 
 def test_should_filter_sagas_when_status_query_is_provided(scipio_cluster, start_saga, wait_for_status, cancel_saga):
@@ -54,12 +68,14 @@ def test_should_filter_sagas_when_status_query_is_provided(scipio_cluster, start
     session, first_base_url, _, _ = scipio_cluster
     first_saga_id = start_saga(session, first_base_url, "filter_flow", {"kind": "first"})
     second_saga_id = start_saga(session, first_base_url, "filter_flow", {"kind": "second"})
+    wait_for_status(session, first_base_url, first_saga_id, "COMPLETED")
+    wait_for_status(session, first_base_url, second_saga_id, "COMPLETED")
 
     # when
     cancel_response = cancel_saga(session, first_base_url, second_saga_id)
-    assert cancel_response.status_code == 500
-    wait_for_status(session, first_base_url, first_saga_id, "COMPLETED")
-    response = session.get(f"{first_base_url}/sagas", params={"status": "CANCELING"}, timeout=3)
+    assert cancel_response.status_code == 202
+    wait_for_status(session, first_base_url, second_saga_id, "COMPENSATED")
+    response = session.get(f"{first_base_url}/sagas", params={"status": "COMPENSATED"}, timeout=3)
 
     # then
     assert response.status_code == 200
@@ -151,7 +167,8 @@ def test_should_handle_concurrent_cancellation_from_multiple_instances_when_lock
     # given
     session, first_base_url, second_base_url, _ = scipio_cluster
     saga_id = start_saga(session, first_base_url, "dual_cancel", {"ref": "same-saga"})
-    
+    wait_for_status(session, first_base_url, saga_id, "COMPLETED")
+
     # when
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         futures = [
@@ -159,11 +176,12 @@ def test_should_handle_concurrent_cancellation_from_multiple_instances_when_lock
             executor.submit(cancel_saga, session, second_base_url, saga_id),
         ]
         responses = [future.result().status_code for future in futures]
-    saga = wait_for_status(session, first_base_url, saga_id, "CANCELING")
+    saga = wait_for_status(session, first_base_url, saga_id, "COMPENSATED")
 
     # then
-    assert responses == [500, 500]
-    assert saga["status"] == "CANCELING"
+    assert all(status in (202, 409) for status in responses)
+    assert responses.count(202) >= 1
+    assert saga["status"] == "COMPENSATED"
 
 
 def test_should_persist_saga_in_postgres_when_saga_is_started(

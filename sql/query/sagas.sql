@@ -88,28 +88,49 @@ FOR UPDATE;
 
 -- name: ClaimNextStep :one
 WITH candidate AS (
-    SELECT ss.saga_id, ss.step_index
+    SELECT
+        ss.saga_id,
+        ss.step_index,
+        CASE
+            WHEN s.status = 'CANCELING' THEN 'COMPENSATING'
+            ELSE 'RUNNING'
+        END AS next_status
     FROM saga_steps ss
     INNER JOIN sagas s ON s.id = ss.saga_id
-    WHERE s.status IN ('CREATED', 'RUNNING')
-      AND (
-        ss.status = 'PENDING'
-        OR (ss.status = 'RUNNING' AND ss.updated_at <= $1)
-      )
-      AND NOT EXISTS (
-        SELECT 1
-        FROM saga_steps prev
-        WHERE prev.saga_id = ss.saga_id
-          AND prev.step_index < ss.step_index
-          AND prev.status <> 'COMPLETED'
-      )
+    WHERE (
+        s.status IN ('CREATED', 'RUNNING')
+        AND (
+            ss.status = 'PENDING'
+            OR (ss.status = 'RUNNING' AND ss.started_at <= $1)
+        )
+        AND NOT EXISTS (
+            SELECT 1
+            FROM saga_steps prev
+            WHERE prev.saga_id = ss.saga_id
+              AND prev.step_index < ss.step_index
+              AND prev.status <> 'COMPLETED'
+        )
+    ) OR (
+        s.status = 'CANCELING'
+        AND (
+            ss.status IN ('COMPLETED', 'RUNNING')
+            OR (ss.status = 'COMPENSATING' AND ss.started_at <= $1)
+        )
+        AND NOT EXISTS (
+            SELECT 1
+            FROM saga_steps next
+            WHERE next.saga_id = ss.saga_id
+              AND next.step_index > ss.step_index
+              AND next.status IN ('COMPLETED', 'RUNNING', 'COMPENSATING')
+        )
+    )
     ORDER BY ss.updated_at ASC, ss.id ASC
     FOR UPDATE OF ss SKIP LOCKED
     LIMIT 1
 )
 UPDATE saga_steps ss
 SET
-    status = 'RUNNING',
+    status = candidate.next_status,
     attempt = ss.attempt + 1,
     started_at = COALESCE(ss.started_at, NOW()),
     finished_at = NULL,

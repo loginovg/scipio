@@ -200,7 +200,7 @@ func TestShouldReturnErrInvalidStepGRPCTargetWhenStepTargetIsBlank(t *testing.T)
 	require.ErrorIs(t, err, ErrInvalidStepGRPCTarget)
 }
 
-func TestShouldReturnErrCompensationNotImplementedWhenCancelRequested(t *testing.T) {
+func TestShouldReturnCompensatedSagaWhenCancelRequestedBeforeStepExecution(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -213,17 +213,21 @@ func TestShouldReturnErrCompensationNotImplementedWhenCancelRequested(t *testing
 	saga, cancelErr := svc.CancelSaga(context.Background(), sagaID)
 
 	// then
-	require.ErrorIs(t, cancelErr, ErrCompensationNotImplemented)
-	require.Equal(t, domain.Saga{}, saga)
+	require.NoError(t, cancelErr)
+	require.Equal(t, domain.SagaStatusCompensated, saga.Status)
+	require.Len(t, saga.Steps, 1)
+	require.Equal(t, domain.SagaStepStatusCompensated, saga.Steps[0].Status)
+	require.NotNil(t, saga.Steps[0].FinishedAt)
+	require.Equal(t, "", saga.Steps[0].Error)
 
 	storedSaga, getErr := svc.GetSaga(context.Background(), sagaID)
 	require.NoError(t, getErr)
-	require.Equal(t, domain.SagaStatusCanceling, storedSaga.Status)
+	require.Equal(t, domain.SagaStatusCompensated, storedSaga.Status)
 	require.Len(t, storedSaga.Steps, 1)
-	require.Equal(t, domain.SagaStepStatusPending, storedSaga.Steps[0].Status)
+	require.Equal(t, domain.SagaStepStatusCompensated, storedSaga.Steps[0].Status)
 }
 
-func TestShouldReturnErrCompensationNotImplementedWhenCancelRequestedForRunningSaga(t *testing.T) {
+func TestShouldReturnCancelingSagaWhenCancelRequestedForRunningSaga(t *testing.T) {
 	t.Parallel()
 
 	memoryStore := store.NewMemory()
@@ -252,8 +256,12 @@ func TestShouldReturnErrCompensationNotImplementedWhenCancelRequestedForRunningS
 
 	saga, cancelErr := svc.CancelSaga(context.Background(), "running-saga")
 
-	require.ErrorIs(t, cancelErr, ErrCompensationNotImplemented)
-	require.Equal(t, domain.Saga{}, saga)
+	require.NoError(t, cancelErr)
+	require.Equal(t, domain.SagaStatusCanceling, saga.Status)
+	require.Len(t, saga.Steps, 1)
+	require.Equal(t, domain.SagaStepStatusRunning, saga.Steps[0].Status)
+	require.Equal(t, uint32(1), saga.Steps[0].Attempt)
+	require.NotNil(t, saga.Steps[0].StartedAt)
 
 	storedSaga, getErr := memoryStore.Get(context.Background(), "running-saga")
 	require.NoError(t, getErr)
@@ -318,10 +326,10 @@ func TestShouldFilterSagasByStatusWhenStatusFilterProvided(t *testing.T) {
 
 	// when
 	_, cancelErr := svc.CancelSaga(context.Background(), secondID)
-	require.ErrorIs(t, cancelErr, ErrCompensationNotImplemented)
+	require.NoError(t, cancelErr)
 
 	require.Eventually(t, func() bool {
-		sagas, listErr := svc.ListSagas(context.Background(), string(domain.SagaStatusCanceling), 50, 0)
+		sagas, listErr := svc.ListSagas(context.Background(), string(domain.SagaStatusCompensated), 50, 0)
 		if listErr != nil {
 			return false
 		}

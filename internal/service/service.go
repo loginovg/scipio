@@ -24,7 +24,6 @@ var ErrInvalidStepGRPCTarget = errors.New("step grpc target must not be empty")
 var ErrInvalidStatusFilter = errors.New("invalid status filter")
 var ErrInvalidPagination = errors.New("invalid pagination")
 var ErrStoreNotConfigured = errors.New("saga store is not configured")
-var ErrCompensationNotImplemented = errors.New("saga compensation is not implemented")
 var ErrSagaNotFound = errors.New("saga not found")
 var ErrSagaLockContended = errors.New("saga lock is contended")
 var ErrSagaCancelNotAllowed = errors.New("saga cannot be canceled from current status")
@@ -140,11 +139,15 @@ func (s *Service) CancelSaga(ctx context.Context, sagaID string) (domain.Saga, e
 	if err := s.sagaLocker.withSagaLock(ctx, sagaID, func(lockCtx context.Context) error {
 		updatedSaga, updateErr := s.store.Update(lockCtx, sagaID, func(candidate *domain.Saga) error {
 			switch candidate.Status {
-			case domain.SagaStatusCreated, domain.SagaStatusRunning, domain.SagaStatusCompleted:
-				if statemachine.CanTransition(candidate.Status, domain.SagaStatusCanceling) {
+			case domain.SagaStatusCreated, domain.SagaStatusRunning, domain.SagaStatusCompleted, domain.SagaStatusCanceling:
+				if candidate.Status != domain.SagaStatusCanceling {
+					if !statemachine.CanTransition(candidate.Status, domain.SagaStatusCanceling) {
+						return nil
+					}
 					candidate.Status = domain.SagaStatusCanceling
 				}
-			case domain.SagaStatusCanceling, domain.SagaStatusCompensated:
+				normalizeSagaForCancellation(candidate)
+			case domain.SagaStatusCompensated:
 				return nil
 			case domain.SagaStatusFailed:
 				return ErrSagaCancelNotAllowed
@@ -159,17 +162,53 @@ func (s *Service) CancelSaga(ctx context.Context, sagaID string) (domain.Saga, e
 		}
 
 		saga = updatedSaga
-		if saga.Status != domain.SagaStatusCanceling {
-			return nil
-		}
-
-		// TODO: implement backward compensation later
-		return ErrCompensationNotImplemented
+		return nil
 	}); err != nil {
 		return domain.Saga{}, mapStoreError(err)
 	}
 
 	return saga, nil
+}
+
+func normalizeSagaForCancellation(candidate *domain.Saga) {
+	now := time.Now().UTC()
+	for index := range candidate.Steps {
+		step := &candidate.Steps[index]
+		if step.Status != domain.SagaStepStatusPending {
+			continue
+		}
+
+		step.Status = domain.SagaStepStatusCompensated
+		step.FinishedAt = &now
+		step.Error = ""
+	}
+
+	if candidate.Status != domain.SagaStatusCanceling {
+		return
+	}
+
+	if hasFailedStep(candidate.Steps) {
+		if statemachine.CanTransition(candidate.Status, domain.SagaStatusFailed) {
+			candidate.Status = domain.SagaStatusFailed
+		}
+		return
+	}
+
+	if !hasPendingCompensationSteps(candidate.Steps) && statemachine.CanTransition(candidate.Status, domain.SagaStatusCompensated) {
+		candidate.Status = domain.SagaStatusCompensated
+	}
+}
+
+func hasPendingCompensationSteps(steps []domain.SagaStep) bool {
+	for _, step := range steps {
+		if step.Status == domain.SagaStepStatusCompleted ||
+			step.Status == domain.SagaStepStatusRunning ||
+			step.Status == domain.SagaStepStatusCompensating {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (s *Service) ListSagas(ctx context.Context, status string, limit int, offset int) ([]domain.Saga, error) {

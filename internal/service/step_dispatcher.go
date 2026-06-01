@@ -44,23 +44,27 @@ func (grpcStepDispatcher) Dispatch(ctx context.Context, saga domain.Saga, step d
 	callCtx, cancel := context.WithTimeout(ctx, stepDispatchTimeout)
 	defer cancel()
 
-	_, err = sagav1.NewSagaStepExecutorClient(conn).ExecuteStep(callCtx, &sagav1.ExecuteStepRequest{
-		SagaId:   saga.ID,
-		Workflow: saga.Workflow,
-		StepName: step.Name,
-		Attempt:  step.Attempt,
-		Context:  payload,
-	})
-	if err != nil {
+	client := sagav1.NewSagaStepExecutorClient(conn)
+	operationName := "execute"
+	var callErr error
+	if step.Status == domain.SagaStepStatusCompensating {
+		operationName = "compensate"
+		callErr = compensateStep(callCtx, client, saga, step, payload)
+	} else {
+		callErr = executeStep(callCtx, client, saga, step, payload)
+	}
+
+	if callErr != nil {
+		wrappedCallErr := fmt.Errorf("%s step via grpc target %q: %w", operationName, step.GRPCTarget, callErr)
 		closeErr := conn.Close()
 		if closeErr != nil {
 			return errors.Join(
-				fmt.Errorf("execute step via grpc target %q: %w", step.GRPCTarget, err),
+				wrappedCallErr,
 				fmt.Errorf("close step target connection %q: %w", step.GRPCTarget, closeErr),
 			)
 		}
 
-		return fmt.Errorf("execute step via grpc target %q: %w", step.GRPCTarget, err)
+		return wrappedCallErr
 	}
 
 	if closeErr := conn.Close(); closeErr != nil {
@@ -68,4 +72,38 @@ func (grpcStepDispatcher) Dispatch(ctx context.Context, saga domain.Saga, step d
 	}
 
 	return nil
+}
+
+func executeStep(
+	ctx context.Context,
+	client sagav1.SagaStepExecutorClient,
+	saga domain.Saga,
+	step domain.SagaStep,
+	payload []byte,
+) error {
+	_, err := client.ExecuteStep(ctx, &sagav1.ExecuteStepRequest{
+		SagaId:   saga.ID,
+		Workflow: saga.Workflow,
+		StepName: step.Name,
+		Attempt:  step.Attempt,
+		Context:  payload,
+	})
+	return err
+}
+
+func compensateStep(
+	ctx context.Context,
+	client sagav1.SagaStepExecutorClient,
+	saga domain.Saga,
+	step domain.SagaStep,
+	payload []byte,
+) error {
+	_, err := client.CompensateStep(ctx, &sagav1.CompensateStepRequest{
+		SagaId:   saga.ID,
+		Workflow: saga.Workflow,
+		StepName: step.Name,
+		Attempt:  step.Attempt,
+		Context:  payload,
+	})
+	return err
 }

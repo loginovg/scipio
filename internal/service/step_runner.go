@@ -37,6 +37,14 @@ type stepExecutionResult struct {
 	StepIndex int
 }
 
+type stepDispatchMode int
+
+const (
+	stepDispatchModeNone stepDispatchMode = iota
+	stepDispatchModeExecute
+	stepDispatchModeCompensate
+)
+
 func NewStepRunner(
 	store stepQueueStore,
 	locker lock.Locker,
@@ -200,30 +208,36 @@ func (r *StepRunner) loadClaimedStepForDispatch(ctx context.Context, claimed dom
 	}
 
 	step := saga.Steps[claimed.StepIndex]
-	skipDispatch, err := shouldSkipClaimedStepDispatch(saga.Status, step.Status)
-	if err != nil {
-		return domain.Saga{}, domain.SagaStep{}, false, err
-	}
-	if skipDispatch {
+	dispatchMode, shouldDispatch := resolveClaimedStepDispatchMode(saga.Status, step.Status)
+	if !shouldDispatch {
 		return domain.Saga{}, domain.SagaStep{}, false, nil
+	}
+
+	if dispatchMode == stepDispatchModeCompensate {
+		step.Status = domain.SagaStepStatusCompensating
 	}
 
 	return saga, step, true, nil
 }
 
-func shouldSkipClaimedStepDispatch(sagaStatus domain.SagaStatus, stepStatus domain.SagaStepStatus) (bool, error) {
+func resolveClaimedStepDispatchMode(sagaStatus domain.SagaStatus, stepStatus domain.SagaStepStatus) (stepDispatchMode, bool) {
 	switch sagaStatus {
 	case domain.SagaStatusCanceling:
-		return false, ErrCompensationNotImplemented
+		switch stepStatus {
+		case domain.SagaStepStatusRunning, domain.SagaStepStatusCompleted, domain.SagaStepStatusCompensating:
+			return stepDispatchModeCompensate, true
+		default:
+			return stepDispatchModeNone, false
+		}
 	case domain.SagaStatusCompensated, domain.SagaStatusFailed:
-		return true, nil
+		return stepDispatchModeNone, false
 	}
 
-	if stepStatus != domain.SagaStepStatusPending && stepStatus != domain.SagaStepStatusRunning {
-		return true, nil
+	if stepStatus == domain.SagaStepStatusPending || stepStatus == domain.SagaStepStatusRunning {
+		return stepDispatchModeExecute, true
 	}
 
-	return false, nil
+	return stepDispatchModeNone, false
 }
 
 func (r *StepRunner) updateClaimedStepAfterDispatch(ctx context.Context, claimed domain.ClaimedSagaStep, dispatchErr error) error {
@@ -233,7 +247,19 @@ func (r *StepRunner) updateClaimedStepAfterDispatch(ctx context.Context, claimed
 		}
 
 		candidateStep := &candidate.Steps[claimed.StepIndex]
-		if candidateStep.Status != domain.SagaStepStatusPending && candidateStep.Status != domain.SagaStepStatusRunning {
+		if candidate.Status == domain.SagaStatusCanceling {
+			if candidateStep.Status != domain.SagaStepStatusRunning &&
+				candidateStep.Status != domain.SagaStepStatusCompleted &&
+				candidateStep.Status != domain.SagaStepStatusCompensating {
+				return nil
+			}
+
+			applyClaimedStepCompensationResult(candidate, candidateStep, dispatchErr)
+			return nil
+		}
+
+		if candidateStep.Status != domain.SagaStepStatusPending &&
+			candidateStep.Status != domain.SagaStepStatusRunning {
 			return nil
 		}
 
@@ -271,6 +297,34 @@ func applyClaimedStepDispatchResult(candidate *domain.Saga, candidateStep *domai
 
 	if allStepsCompleted(candidate.Steps) && statemachine.CanTransition(candidate.Status, domain.SagaStatusCompleted) {
 		candidate.Status = domain.SagaStatusCompleted
+	}
+}
+
+func applyClaimedStepCompensationResult(candidate *domain.Saga, candidateStep *domain.SagaStep, dispatchErr error) {
+	now := time.Now().UTC()
+	if dispatchErr != nil {
+		candidateStep.Status = domain.SagaStepStatusFailed
+		candidateStep.FinishedAt = &now
+		candidateStep.Error = dispatchErr.Error()
+		if statemachine.CanTransition(candidate.Status, domain.SagaStatusFailed) {
+			candidate.Status = domain.SagaStatusFailed
+		}
+		return
+	}
+
+	candidateStep.Status = domain.SagaStepStatusCompensated
+	candidateStep.FinishedAt = &now
+	candidateStep.Error = ""
+
+	if hasFailedStep(candidate.Steps) {
+		if statemachine.CanTransition(candidate.Status, domain.SagaStatusFailed) {
+			candidate.Status = domain.SagaStatusFailed
+		}
+		return
+	}
+
+	if !hasPendingCompensationSteps(candidate.Steps) && statemachine.CanTransition(candidate.Status, domain.SagaStatusCompensated) {
+		candidate.Status = domain.SagaStatusCompensated
 	}
 }
 

@@ -241,7 +241,7 @@ def wait_for_step_dispatch(scipio_cluster):
     reset_response = session.delete(f"{scipio_cluster.step_http_base_url}/calls", timeout=3)
     assert reset_response.status_code == 204
 
-    def _wait_for_step_dispatch(saga_id, expected_calls=1):
+    def _wait_for_step_dispatch(saga_id, expected_calls=1, operation=None):
         deadline = time.monotonic() + 20
 
         while time.monotonic() < deadline:
@@ -252,6 +252,8 @@ def wait_for_step_dispatch(scipio_cluster):
 
             calls = response.json()
             saga_calls = [call for call in calls if call["saga_id"] == saga_id]
+            if operation is not None:
+                saga_calls = [call for call in saga_calls if call.get("operation") == operation]
 
             if len(saga_calls) >= expected_calls:
                 return saga_calls
