@@ -19,7 +19,7 @@ func TestShouldCompleteSagaWhenRunnerDrainsPendingStep(t *testing.T) {
 	t.Parallel()
 
 	// given
-	queueStore := newMemoryStepQueueStore()
+	queueStore := store.NewMemory()
 	dispatcher := &capturingStepDispatcher{}
 	svc, newErr := New(queueStore, lock.NewNoop(), time.Second)
 	require.NoError(t, newErr)
@@ -68,7 +68,7 @@ func TestShouldRecoverRunningStepWhenRunnerDetectsStaleExecution(t *testing.T) {
 	t.Parallel()
 
 	// given
-	queueStore := newMemoryStepQueueStore()
+	queueStore := store.NewMemory()
 	now := time.Now().UTC()
 	startedAt := now.Add(-time.Minute)
 	createErr := queueStore.Create(context.Background(), domain.Saga{
@@ -124,7 +124,7 @@ func TestShouldRecoverRunningStepWhenRunnerDetectsStaleExecution(t *testing.T) {
 func TestShouldDispatchSagaContextWhenRunnerExecutesConfiguredStep(t *testing.T) {
 	t.Parallel()
 
-	queueStore := newMemoryStepQueueStore()
+	queueStore := store.NewMemory()
 	dispatcher := &capturingStepDispatcher{}
 	svc, newErr := New(queueStore, lock.NewNoop(), time.Second)
 	require.NoError(t, newErr)
@@ -184,7 +184,7 @@ func TestShouldDispatchSagaContextWhenRunnerExecutesConfiguredStep(t *testing.T)
 func TestShouldFailSagaWhenStepDispatchReturnsError(t *testing.T) {
 	t.Parallel()
 
-	queueStore := newMemoryStepQueueStore()
+	queueStore := store.NewMemory()
 	dispatcher := &capturingStepDispatcher{err: errors.New("participant unavailable")}
 	svc, newErr := New(queueStore, lock.NewNoop(), time.Second)
 	require.NoError(t, newErr)
@@ -247,7 +247,7 @@ func TestShouldReturnErrStoreNotConfiguredWhenStepRunnerStoreIsNil(t *testing.T)
 func TestShouldReturnErrCompensationNotImplementedWhenRunnerProcessesCancelingSaga(t *testing.T) {
 	t.Parallel()
 
-	queueStore := newMemoryStepQueueStore()
+	queueStore := store.NewMemory()
 	now := time.Now().UTC()
 	createErr := queueStore.Create(context.Background(), domain.Saga{
 		ID:       "saga-canceling-step",
@@ -287,7 +287,7 @@ func TestShouldReturnErrCompensationNotImplementedWhenRunnerProcessesCancelingSa
 func TestShouldReturnErrClaimedStepIndexOutOfBoundsWhenClaimedStepIndexIsOutsideSagaSteps(t *testing.T) {
 	t.Parallel()
 
-	queueStore := newMemoryStepQueueStore()
+	queueStore := store.NewMemory()
 	now := time.Now().UTC()
 	createErr := queueStore.Create(context.Background(), domain.Saga{
 		ID:       "saga-out-of-bounds-step",
@@ -319,7 +319,7 @@ func TestShouldReturnErrClaimedStepIndexOutOfBoundsWhenClaimedStepIndexIsOutside
 func TestShouldReturnErrInvalidTTLWhenLockTTLIsNotPositiveInStepRunnerConstructor(t *testing.T) {
 	t.Parallel()
 
-	_, err := NewStepRunner(newMemoryStepQueueStore(), lock.NewNoop(), 0, 1, time.Millisecond, time.Second, nil)
+	_, err := NewStepRunner(store.NewMemory(), lock.NewNoop(), 0, 1, time.Millisecond, time.Second, nil)
 
 	require.ErrorIs(t, err, lock.ErrInvalidTTL)
 }
@@ -327,7 +327,7 @@ func TestShouldReturnErrInvalidTTLWhenLockTTLIsNotPositiveInStepRunnerConstructo
 func TestShouldReturnErrInvalidStepWorkersWhenStepRunnerWorkersAreNotPositive(t *testing.T) {
 	t.Parallel()
 
-	_, err := NewStepRunner(newMemoryStepQueueStore(), lock.NewNoop(), time.Second, 0, time.Millisecond, time.Second, nil)
+	_, err := NewStepRunner(store.NewMemory(), lock.NewNoop(), time.Second, 0, time.Millisecond, time.Second, nil)
 
 	require.ErrorIs(t, err, ErrInvalidStepWorkers)
 }
@@ -335,7 +335,7 @@ func TestShouldReturnErrInvalidStepWorkersWhenStepRunnerWorkersAreNotPositive(t 
 func TestShouldReturnErrInvalidStepPollIntervalWhenStepRunnerPollIntervalIsNotPositive(t *testing.T) {
 	t.Parallel()
 
-	_, err := NewStepRunner(newMemoryStepQueueStore(), lock.NewNoop(), time.Second, 1, 0, time.Second, nil)
+	_, err := NewStepRunner(store.NewMemory(), lock.NewNoop(), time.Second, 1, 0, time.Second, nil)
 
 	require.ErrorIs(t, err, ErrInvalidStepPollInterval)
 }
@@ -343,104 +343,9 @@ func TestShouldReturnErrInvalidStepPollIntervalWhenStepRunnerPollIntervalIsNotPo
 func TestShouldReturnErrInvalidStepStaleTimeoutWhenStepRunnerStaleTimeoutIsNotPositive(t *testing.T) {
 	t.Parallel()
 
-	_, err := NewStepRunner(newMemoryStepQueueStore(), lock.NewNoop(), time.Second, 1, time.Millisecond, 0, nil)
+	_, err := NewStepRunner(store.NewMemory(), lock.NewNoop(), time.Second, 1, time.Millisecond, 0, nil)
 
 	require.ErrorIs(t, err, ErrInvalidStepStaleTimeout)
-}
-
-type memoryStepQueueStore struct {
-	inner *store.Memory
-}
-
-func newMemoryStepQueueStore() *memoryStepQueueStore {
-	return &memoryStepQueueStore{inner: store.NewMemory()}
-}
-
-func (m *memoryStepQueueStore) Create(ctx context.Context, saga domain.Saga) error {
-	return m.inner.Create(ctx, saga)
-}
-
-func (m *memoryStepQueueStore) Get(ctx context.Context, id string) (domain.Saga, error) {
-	return m.inner.Get(ctx, id)
-}
-
-func (m *memoryStepQueueStore) List(ctx context.Context, status *domain.SagaStatus, limit int, offset int) ([]domain.Saga, error) {
-	return m.inner.List(ctx, status, limit, offset)
-}
-
-func (m *memoryStepQueueStore) Update(ctx context.Context, id string, fn func(*domain.Saga) error) (domain.Saga, error) {
-	return m.inner.Update(ctx, id, fn)
-}
-
-func (m *memoryStepQueueStore) ClaimNextStep(ctx context.Context, staleAfter time.Duration) (domain.ClaimedSagaStep, bool, error) {
-	sagas, err := m.inner.List(ctx, nil, 1000, 0)
-	if err != nil {
-		return domain.ClaimedSagaStep{}, false, err
-	}
-
-	for _, saga := range sagas {
-		if saga.Status != domain.SagaStatusCreated && saga.Status != domain.SagaStatusRunning {
-			continue
-		}
-
-		for index, step := range saga.Steps {
-			if !areAllPreviousStepsCompleted(saga.Steps, index) {
-				continue
-			}
-
-			isPending := step.Status == domain.SagaStepStatusPending
-			isRunningAndStale := step.Status == domain.SagaStepStatusRunning &&
-				staleAfter > 0 &&
-				step.StartedAt != nil &&
-				time.Since(step.StartedAt.UTC()) >= staleAfter
-			if !isPending && !isRunningAndStale {
-				continue
-			}
-
-			claimed := domain.ClaimedSagaStep{
-				SagaID:    saga.ID,
-				StepIndex: index,
-				Name:      step.Name,
-				Attempt:   step.Attempt + 1,
-			}
-
-			_, updateErr := m.inner.Update(ctx, saga.ID, func(candidate *domain.Saga) error {
-				if index < 0 || index >= len(candidate.Steps) {
-					return nil
-				}
-
-				candidateStep := &candidate.Steps[index]
-				if candidateStep.Status != domain.SagaStepStatusPending && candidateStep.Status != domain.SagaStepStatusRunning {
-					return nil
-				}
-
-				now := time.Now().UTC()
-				candidateStep.Status = domain.SagaStepStatusRunning
-				candidateStep.Attempt++
-				candidateStep.StartedAt = &now
-				candidateStep.FinishedAt = nil
-				candidateStep.Error = ""
-				return nil
-			})
-			if updateErr != nil {
-				return domain.ClaimedSagaStep{}, false, updateErr
-			}
-
-			return claimed, true, nil
-		}
-	}
-
-	return domain.ClaimedSagaStep{}, false, nil
-}
-
-func areAllPreviousStepsCompleted(steps []domain.SagaStep, currentIndex int) bool {
-	for index := 0; index < currentIndex; index++ {
-		if steps[index].Status != domain.SagaStepStatusCompleted {
-			return false
-		}
-	}
-
-	return true
 }
 
 type dispatchCall struct {

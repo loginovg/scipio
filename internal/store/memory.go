@@ -131,3 +131,78 @@ func (m *Memory) Update(ctx context.Context, id string, fn func(*domain.Saga) er
 
 	return updated.Clone(), nil
 }
+
+func (m *Memory) ClaimNextStep(ctx context.Context, staleAfter time.Duration) (domain.ClaimedSagaStep, bool, error) {
+	select {
+	case <-ctx.Done():
+		return domain.ClaimedSagaStep{}, false, ctx.Err()
+	default:
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	orderedSagas := make([]domain.Saga, 0, len(m.sagas))
+	for _, saga := range m.sagas {
+		orderedSagas = append(orderedSagas, saga.Clone())
+	}
+
+	sort.Slice(orderedSagas, func(i, j int) bool {
+		left := orderedSagas[i]
+		right := orderedSagas[j]
+		if left.CreatedAt.Equal(right.CreatedAt) {
+			return left.ID < right.ID
+		}
+
+		return left.CreatedAt.Before(right.CreatedAt)
+	})
+
+	now := time.Now().UTC()
+	for _, saga := range orderedSagas {
+		if saga.Status != domain.SagaStatusCreated && saga.Status != domain.SagaStatusRunning {
+			continue
+		}
+
+		for index := range saga.Steps {
+			if !allPreviousStepsAreCompleted(saga.Steps, index) {
+				continue
+			}
+
+			step := &saga.Steps[index]
+			isPending := step.Status == domain.SagaStepStatusPending
+			isRunningAndStale := step.Status == domain.SagaStepStatusRunning &&
+				step.StartedAt != nil &&
+				time.Since(step.StartedAt.UTC()) >= staleAfter
+			if !isPending && !isRunningAndStale {
+				continue
+			}
+
+			step.Status = domain.SagaStepStatusRunning
+			step.Attempt++
+			step.StartedAt = &now
+			step.FinishedAt = nil
+			step.Error = ""
+			saga.UpdatedAt = now
+			m.sagas[saga.ID] = saga
+
+			return domain.ClaimedSagaStep{
+				SagaID:    saga.ID,
+				StepIndex: index,
+				Name:      step.Name,
+				Attempt:   step.Attempt,
+			}, true, nil
+		}
+	}
+
+	return domain.ClaimedSagaStep{}, false, nil
+}
+
+func allPreviousStepsAreCompleted(steps []domain.SagaStep, currentIndex int) bool {
+	for index := 0; index < currentIndex; index++ {
+		if steps[index].Status != domain.SagaStepStatusCompleted {
+			return false
+		}
+	}
+
+	return true
+}
