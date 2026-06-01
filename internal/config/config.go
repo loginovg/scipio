@@ -18,7 +18,6 @@ const (
 	defaultLockRetryInterval        = 25 * time.Millisecond
 	defaultPostgresConnectionString = "postgresql://scipio:scipio@127.0.0.1:5432/scipio?sslmode=disable"
 	defaultRedisConnectionString    = "redis://127.0.0.1:6380/0"
-	defaultSchemaPath               = "sql/schema/sagas.sql"
 )
 
 type Runtime struct {
@@ -31,7 +30,6 @@ type Runtime struct {
 	LockRetryInterval        time.Duration
 	PostgresConnectionString string
 	RedisConnectionString    string
-	SchemaPath               string
 }
 
 func Load() (Runtime, error) {
@@ -80,11 +78,6 @@ func Load() (Runtime, error) {
 		return Runtime{}, err
 	}
 
-	schemaPath, err := envVar("SCIPIO_SCHEMA_PATH", asString, defaultSchemaPath)
-	if err != nil {
-		return Runtime{}, err
-	}
-
 	return Runtime{
 		GRPCPort:                 grpcPort,
 		HTTPPort:                 httpPort,
@@ -95,7 +88,6 @@ func Load() (Runtime, error) {
 		LockRetryInterval:        lockRetryInterval,
 		PostgresConnectionString: postgresConnectionString,
 		RedisConnectionString:    redisConnectionString,
-		SchemaPath:               schemaPath,
 	}, nil
 }
 

@@ -30,7 +30,6 @@ Environment variables:
 - `REDIS_CONN` (default: `redis://127.0.0.1:6380/0`)
 - `SCIPIO_LOCK_TTL` (default: `5s`)
 - `SCIPIO_LOCK_RETRY_INTERVAL` (default: `25ms`)
-- `SCIPIO_SCHEMA_PATH` (default: `sql/schema/sagas.sql`)
 
 Useful Make targets:
 

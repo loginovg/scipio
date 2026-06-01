@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -21,6 +20,7 @@ import (
 	"scipio/internal/store"
 	"scipio/internal/transport/grpcserver"
 	"scipio/internal/transport/httpserver"
+	sqlschema "scipio/sql"
 
 	"google.golang.org/grpc"
 )
@@ -64,13 +64,13 @@ func run() error {
 	}
 	defer postgresStore.Close()
 
-	schemaSQL, err := loadSchemaSQL(cfg.SchemaPath)
+	schemaSQL, err := loadEmbeddedSchemaSQL()
 	if err != nil {
-		return fmt.Errorf("failed to load schema from %q: %w", cfg.SchemaPath, err)
+		return fmt.Errorf("failed to load embedded schema: %w", err)
 	}
 
 	if err := postgresStore.Migrate(ctx, schemaSQL); err != nil {
-		return fmt.Errorf("failed to apply schema %q: %w", cfg.SchemaPath, err)
+		return fmt.Errorf("failed to apply embedded schema: %w", err)
 	}
 
 	redisLocker, err := lock.NewRedisFromURL(cfg.RedisConnectionString, "scipio:lock:saga:", cfg.LockRetryInterval)
@@ -209,19 +209,11 @@ func newHTTPServer(port int, handler http.Handler) *http.Server {
 	}
 }
 
-func loadSchemaSQL(path string) (string, error) {
-	if !strings.EqualFold(filepath.Ext(path), ".sql") {
-		return "", fmt.Errorf("schema path is not a sql file: %s", path)
+func loadEmbeddedSchemaSQL() (string, error) {
+	schemaSQL := sqlschema.SagaSchema()
+	if strings.TrimSpace(schemaSQL) == "" {
+		return "", errors.New("embedded schema is empty")
 	}
 
-	schemaSQL, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-
-	if strings.TrimSpace(string(schemaSQL)) == "" {
-		return "", fmt.Errorf("schema file is empty: %s", path)
-	}
-
-	return string(schemaSQL), nil
+	return schemaSQL, nil
 }

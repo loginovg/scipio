@@ -4,8 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"os"
-	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,41 +12,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldReturnSchemaSQLWhenSchemaPathIsSQLFile(t *testing.T) {
+func TestShouldReturnEmbeddedSchemaSQLWhenRuntimeLoadsSchema(t *testing.T) {
 	t.Parallel()
 
-	tempDir := t.TempDir()
-	schemaFile := filepath.Join(tempDir, "schema.sql")
-	require.NoError(t, os.WriteFile(schemaFile, []byte("SELECT 1;"), 0o644))
-
-	schemaSQL, err := loadSchemaSQL(schemaFile)
+	schemaSQL, err := loadEmbeddedSchemaSQL()
 
 	require.NoError(t, err)
-	require.Equal(t, "SELECT 1;", schemaSQL)
-}
-
-func TestShouldReturnErrorWhenSchemaPathIsDirectory(t *testing.T) {
-	t.Parallel()
-
-	tempDir := t.TempDir()
-
-	schemaSQL, err := loadSchemaSQL(tempDir)
-
-	require.Error(t, err)
-	require.Equal(t, "", schemaSQL)
-}
-
-func TestShouldReturnErrorWhenSchemaPathIsNotSQLFile(t *testing.T) {
-	t.Parallel()
-
-	tempDir := t.TempDir()
-	schemaFile := filepath.Join(tempDir, "schema.txt")
-	require.NoError(t, os.WriteFile(schemaFile, []byte("SELECT 1;"), 0o644))
-
-	schemaSQL, err := loadSchemaSQL(schemaFile)
-
-	require.Error(t, err)
-	require.Equal(t, "", schemaSQL)
+	require.NotEmpty(t, strings.TrimSpace(schemaSQL))
+	require.Contains(t, schemaSQL, "CREATE TABLE IF NOT EXISTS sagas")
 }
 
 func TestShouldShutdownIngressBeforeRunnerWhenRuntimeStops(t *testing.T) {

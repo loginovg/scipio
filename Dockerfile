@@ -6,9 +6,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/scipio ./cmd/scipio
 
 FROM alpine:3.22
-WORKDIR /app
 COPY --from=build /out/scipio /usr/local/bin/scipio
-COPY sql/schema /app/sql/schema
 EXPOSE 8080
 EXPOSE 9090
 ENTRYPOINT ["scipio"]
