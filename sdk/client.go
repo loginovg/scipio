@@ -21,7 +21,11 @@ type StartSagaStep struct {
 }
 
 func NewClient(address string) (*Client, error) {
-	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	return newClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+}
+
+func newClient(address string, options ...grpc.DialOption) (*Client, error) {
+	conn, err := grpc.NewClient(address, options...)
 	if err != nil {
 		return nil, err
 	}
