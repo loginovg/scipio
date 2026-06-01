@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -186,17 +185,9 @@ func mapStoreError(err error) error {
 }
 
 func parseContext(rawContext []byte) (map[string]any, error) {
-	if len(rawContext) == 0 {
-		return nil, ErrInvalidContext
-	}
-
-	var parsed map[string]any
-	if err := json.Unmarshal(rawContext, &parsed); err != nil {
+	parsed, err := domain.ParseSagaContext(rawContext)
+	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidContext, err)
-	}
-
-	if parsed == nil {
-		return nil, ErrInvalidContext
 	}
 
 	return parsed, nil

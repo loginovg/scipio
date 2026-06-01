@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,6 +121,20 @@ func TestShouldReturnErrInvalidContextWhenContextIsInvalidJSON(t *testing.T) {
 
 	// when
 	_, err := svc.StartSaga(context.Background(), "order_flow", []byte(`{"amount":`), nil)
+
+	// then
+	require.ErrorIs(t, err, ErrInvalidContext)
+}
+
+func TestShouldReturnErrInvalidContextWhenContextExceedsSizeLimit(t *testing.T) {
+	t.Parallel()
+
+	// given
+	svc := newTestService(t)
+	rawContext := []byte(`{"payload":"` + strings.Repeat("a", domain.MaxSagaContextBytes) + `"}`)
+
+	// when
+	_, err := svc.StartSaga(context.Background(), "order_flow", rawContext, startSteps("order_flow"))
 
 	// then
 	require.ErrorIs(t, err, ErrInvalidContext)

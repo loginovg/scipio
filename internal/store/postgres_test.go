@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,6 +48,20 @@ func TestShouldReturnErrInvalidSagaContextWhenRawContextIsEmpty(t *testing.T) {
 
 	// given
 	rawContext := []byte{}
+
+	// when
+	parsed, err := parseContext(rawContext)
+
+	// then
+	require.Nil(t, parsed)
+	require.ErrorIs(t, err, ErrInvalidSagaContext)
+}
+
+func TestShouldReturnErrInvalidSagaContextWhenRawContextExceedsSizeLimit(t *testing.T) {
+	t.Parallel()
+
+	// given
+	rawContext := []byte(`{"payload":"` + strings.Repeat("a", domain.MaxSagaContextBytes) + `"}`)
 
 	// when
 	parsed, err := parseContext(rawContext)

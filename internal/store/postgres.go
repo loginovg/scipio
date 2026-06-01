@@ -406,17 +406,9 @@ func rollbackTx(ctx context.Context, tx pgx.Tx) {
 }
 
 func parseContext(rawContext []byte) (map[string]any, error) {
-	if len(rawContext) == 0 {
-		return nil, ErrInvalidSagaContext
-	}
-
-	var parsed map[string]any
-	if err := json.Unmarshal(rawContext, &parsed); err != nil {
+	parsed, err := domain.ParseSagaContext(rawContext)
+	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidSagaContext, err)
-	}
-
-	if parsed == nil {
-		return nil, ErrInvalidSagaContext
 	}
 
 	return parsed, nil
