@@ -101,32 +101,26 @@ func (r *StepRunner) Run(ctx context.Context) error {
 	defer ticker.Stop()
 
 	for {
-		select {
-		case <-ctx.Done():
+		if !isContextAlive(ctx) {
 			return nil
-		default:
 		}
 
 		claimed, found, err := r.store.ClaimNextStep(ctx, r.staleAfter)
 		if err != nil {
-			if ctx.Err() != nil {
+			if !isContextAlive(ctx) {
 				return nil
 			}
 
 			slog.WarnContext(ctx, "failed to claim saga step", "error", err)
-			select {
-			case <-ctx.Done():
+			if !waitTick(ctx, ticker) {
 				return nil
-			case <-ticker.C:
 			}
 			continue
 		}
 
 		if !found {
-			select {
-			case <-ctx.Done():
+			if !waitTick(ctx, ticker) {
 				return nil
-			case <-ticker.C:
 			}
 			continue
 		}
@@ -137,13 +131,24 @@ func (r *StepRunner) Run(ctx context.Context) error {
 			}
 
 			slog.WarnContext(ctx, "failed to submit claimed saga step", "saga_id", claimed.SagaID, "step_index", claimed.StepIndex, "error", submitErr)
-			select {
-			case <-ctx.Done():
+			if !waitTick(ctx, ticker) {
 				return nil
-			case <-ticker.C:
 			}
 		}
 	}
+}
+
+func waitTick(ctx context.Context, ticker *time.Ticker) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-ticker.C:
+		return true
+	}
+}
+
+func isContextAlive(ctx context.Context) bool {
+	return ctx.Err() == nil
 }
 
 func (r *StepRunner) processClaimedStep(ctx context.Context, claimed domain.ClaimedSagaStep) error {
