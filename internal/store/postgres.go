@@ -282,47 +282,70 @@ func mapSagaRow(row storesqlc.Saga) (domain.Saga, error) {
 }
 
 func mapStepRows(rows []storesqlc.GetSagaStepsRow) ([]domain.SagaStep, error) {
-	steps := make([]domain.SagaStep, 0, len(rows))
-	for _, row := range rows {
-		status, statusErr := domain.ParseSagaStepStatus(row.Status)
-		if statusErr != nil {
-			return nil, fmt.Errorf("unsupported saga step status %q", row.Status)
-		}
-
-		steps = append(steps, domain.SagaStep{
-			Name:       row.Name,
-			GRPCTarget: row.GrpcTarget,
-			Status:     status,
-			Attempt:    uint32(row.Attempt),
-			StartedAt:  toTimePtr(row.StartedAt),
-			FinishedAt: toTimePtr(row.FinishedAt),
-			Error:      toString(row.Error),
-		})
-	}
-
-	return steps, nil
+	return mapRows(rows, func(row storesqlc.GetSagaStepsRow) (domain.SagaStep, error) {
+		return mapStepRow(
+			row.Name,
+			row.GrpcTarget,
+			row.Status,
+			row.Attempt,
+			row.StartedAt,
+			row.FinishedAt,
+			row.Error,
+		)
+	})
 }
 
 func mapStepRowsForUpdate(rows []storesqlc.GetSagaStepsForUpdateRow) ([]domain.SagaStep, error) {
-	steps := make([]domain.SagaStep, 0, len(rows))
-	for _, row := range rows {
-		status, statusErr := domain.ParseSagaStepStatus(row.Status)
-		if statusErr != nil {
-			return nil, fmt.Errorf("unsupported saga step status %q", row.Status)
+	return mapRows(rows, func(row storesqlc.GetSagaStepsForUpdateRow) (domain.SagaStep, error) {
+		return mapStepRow(
+			row.Name,
+			row.GrpcTarget,
+			row.Status,
+			row.Attempt,
+			row.StartedAt,
+			row.FinishedAt,
+			row.Error,
+		)
+	})
+}
+
+func mapRows[T any, R any](values []T, mapper func(T) (R, error)) ([]R, error) {
+	mapped := make([]R, 0, len(values))
+	for _, value := range values {
+		result, err := mapper(value)
+		if err != nil {
+			return nil, err
 		}
 
-		steps = append(steps, domain.SagaStep{
-			Name:       row.Name,
-			GRPCTarget: row.GrpcTarget,
-			Status:     status,
-			Attempt:    uint32(row.Attempt),
-			StartedAt:  toTimePtr(row.StartedAt),
-			FinishedAt: toTimePtr(row.FinishedAt),
-			Error:      toString(row.Error),
-		})
+		mapped = append(mapped, result)
 	}
 
-	return steps, nil
+	return mapped, nil
+}
+
+func mapStepRow(
+	name string,
+	grpcTarget string,
+	statusRaw string,
+	attempt int32,
+	startedAt pgtype.Timestamptz,
+	finishedAt pgtype.Timestamptz,
+	errText pgtype.Text,
+) (domain.SagaStep, error) {
+	status, statusErr := domain.ParseSagaStepStatus(statusRaw)
+	if statusErr != nil {
+		return domain.SagaStep{}, fmt.Errorf("unsupported saga step status %q", statusRaw)
+	}
+
+	return domain.SagaStep{
+		Name:       name,
+		GRPCTarget: grpcTarget,
+		Status:     status,
+		Attempt:    uint32(attempt),
+		StartedAt:  toTimePtr(startedAt),
+		FinishedAt: toTimePtr(finishedAt),
+		Error:      toString(errText),
+	}, nil
 }
 
 func replaceSteps(ctx context.Context, writer stepWriter, sagaID string, steps []domain.SagaStep) error {

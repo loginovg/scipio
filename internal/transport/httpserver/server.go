@@ -172,15 +172,12 @@ func mapStep(step domain.SagaStep) openapi.SagaStep {
 }
 
 func mapStartSagaSteps(steps []openapi.StartSagaStep) []service.StartSagaStep {
-	mapped := make([]service.StartSagaStep, 0, len(steps))
-	for _, step := range steps {
-		mapped = append(mapped, service.StartSagaStep{
+	return service.MapStartSagaSteps(steps, func(step openapi.StartSagaStep) service.StartSagaStep {
+		return service.StartSagaStep{
 			Name:       step.Name,
 			GRPCTarget: step.GrpcTarget,
-		})
-	}
-
-	return mapped
+		}
+	})
 }
 
 func copyTime(ts *time.Time) *time.Time {

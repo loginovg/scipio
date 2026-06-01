@@ -124,15 +124,12 @@ func mapStartSagaSteps(steps []*sagav1.StartSagaStep) []service.StartSagaStep {
 		return nil
 	}
 
-	mapped := make([]service.StartSagaStep, 0, len(steps))
-	for _, step := range steps {
-		mapped = append(mapped, service.StartSagaStep{
+	return service.MapStartSagaSteps(steps, func(step *sagav1.StartSagaStep) service.StartSagaStep {
+		return service.StartSagaStep{
 			Name:       step.GetName(),
 			GRPCTarget: step.GetGrpcTarget(),
-		})
-	}
-
-	return mapped
+		}
+	})
 }
 
 func mapSagaStatus(statusValue domain.SagaStatus) sagav1.SagaStatus {
