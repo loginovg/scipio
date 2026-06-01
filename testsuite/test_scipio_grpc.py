@@ -1,7 +1,28 @@
 import json
+import uuid
 
 import grpc
 import pytest
+
+
+def test_should_return_not_found_when_grpc_get_is_requested_for_missing_saga(grpc_targets, get_saga_grpc):
+    first_target, _ = grpc_targets
+
+    with pytest.raises(grpc.RpcError) as err:
+        get_saga_grpc(first_target, uuid.uuid4().hex)
+
+    assert err.value.code() == grpc.StatusCode.NOT_FOUND
+    assert err.value.details() == "saga not found"
+
+
+def test_should_return_not_found_when_grpc_cancel_is_requested_for_missing_saga(grpc_targets, cancel_saga_grpc):
+    first_target, _ = grpc_targets
+
+    with pytest.raises(grpc.RpcError) as err:
+        cancel_saga_grpc(first_target, uuid.uuid4().hex)
+
+    assert err.value.code() == grpc.StatusCode.NOT_FOUND
+    assert err.value.details() == "saga not found"
 
 
 def test_should_create_and_complete_saga_when_grpc_start_request_is_valid(
@@ -84,3 +105,27 @@ def test_should_return_internal_error_when_grpc_cancel_is_requested_and_compensa
     assert err.value.code() == grpc.StatusCode.INTERNAL
     assert err.value.details() == "saga compensation is not implemented"
     assert saga.id == saga_id
+
+
+def test_should_fail_saga_when_grpc_step_target_is_unreachable(
+    grpc_targets,
+    start_saga_grpc,
+    wait_for_status_grpc,
+):
+    first_target, _ = grpc_targets
+    saga_id = start_saga_grpc(
+        first_target,
+        "grpc_failed_step_flow",
+        {"reason": "unreachable"},
+        steps=[{"name": "grpc_failed_step_flow", "grpc_target": "unknown-step-target:50051"}],
+    )
+
+    saga = wait_for_status_grpc(first_target, saga_id, "SAGA_STATUS_FAILED")
+    saga_status_name = saga.DESCRIPTOR.fields_by_name["status"].enum_type.values_by_number[saga.status].name
+    step_status_name = saga.steps[0].DESCRIPTOR.fields_by_name["status"].enum_type.values_by_number[saga.steps[0].status].name
+
+    assert saga.id == saga_id
+    assert saga_status_name == "SAGA_STATUS_FAILED"
+    assert len(saga.steps) == 1
+    assert step_status_name == "SAGA_STEP_STATUS_FAILED"
+    assert saga.steps[0].error != ""

@@ -2,6 +2,24 @@ import concurrent.futures
 import uuid
 
 
+def test_should_return_not_found_when_http_get_requested_for_missing_saga(scipio_cluster):
+    session, first_base_url, _, _ = scipio_cluster
+
+    response = session.get(f"{first_base_url}/sagas/{uuid.uuid4().hex}", timeout=3)
+
+    assert response.status_code == 404
+    assert response.json()["error"] == "saga not found"
+
+
+def test_should_return_not_found_when_http_cancel_requested_for_missing_saga(scipio_cluster, cancel_saga):
+    session, first_base_url, _, _ = scipio_cluster
+
+    response = cancel_saga(session, first_base_url, uuid.uuid4().hex)
+
+    assert response.status_code == 404
+    assert response.json()["error"] == "saga not found"
+
+
 def test_should_create_and_complete_saga_when_start_request_is_valid(scipio_cluster, start_saga, wait_for_status):
     # given
     session, first_base_url, _, _ = scipio_cluster
@@ -208,3 +226,38 @@ def test_should_recover_stale_running_step_when_worker_drains_postgres_steps(
     assert row is not None
     assert row["status"] == "COMPLETED"
     assert row["attempt"] >= 2
+
+
+def test_should_mark_saga_and_step_as_failed_when_step_target_is_unreachable(
+    scipio_cluster,
+    wait_for_status,
+    db_connection,
+):
+    session, first_base_url, _, _ = scipio_cluster
+    response = session.post(
+        f"{first_base_url}/sagas",
+        json={
+            "workflow": "failed_step_flow",
+            "context": {"reason": "unreachable"},
+            "steps": [{"name": "failed_step_flow", "grpc_target": "unknown-step-target:50051"}],
+        },
+        timeout=3,
+    )
+    assert response.status_code == 202
+    saga_id = response.json()["id"]
+
+    saga = wait_for_status(session, first_base_url, saga_id, "FAILED")
+    assert saga["status"] == "FAILED"
+    assert len(saga["steps"]) == 1
+    assert saga["steps"][0]["status"] == "FAILED"
+    assert saga["steps"][0]["error"] is not None
+
+    db_connection.execute(
+        "SELECT status, error FROM saga_steps WHERE saga_id = %s AND step_index = 0",
+        (saga_id,),
+    )
+    row = db_connection.fetchone()
+
+    assert row is not None
+    assert row["status"] == "FAILED"
+    assert row["error"] is not None
