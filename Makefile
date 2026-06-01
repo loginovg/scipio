@@ -38,7 +38,7 @@ help:
 		"  fmt            Run go fmt" \
 		"  vet            Run go vet" \
 		"  lint           Run golangci-lint" \
-		"  tests          Run go tests with -tags test_dep" \
+		"  tests          Run go tests" \
 		"  test-race      Run go tests with race detector" \
 		"  testsuite      Run Python functional tests" \
 		"  codegen        Regenerate proto/openapi/sqlc artifacts"
@@ -59,11 +59,11 @@ lint-code: lint
 
 tests:
 	mkdir -p $(GO_CACHE)
-	GOCACHE=$(GO_CACHE) go test -count=1 -tags test_dep ./...
+	GOCACHE=$(GO_CACHE) go test -count=1 ./...
 
 test-race:
 	mkdir -p $(GO_CACHE)
-	GOCACHE=$(GO_CACHE) go test -count=1 -race -tags test_dep ./...
+	GOCACHE=$(GO_CACHE) go test -count=1 -race ./...
 
 testsuite-deps: $(TESTSUITE_DEPS_STAMP)
 
