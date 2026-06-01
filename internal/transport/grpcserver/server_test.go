@@ -1,6 +1,7 @@
 package grpcserver
 
 import (
+	"errors"
 	"testing"
 
 	"scipio/internal/service"
@@ -29,4 +30,15 @@ func TestShouldReturnInvalidArgumentStatusWhenMappingServiceValidationError(t *t
 	grpcStatus, ok := status.FromError(err)
 	require.True(t, ok)
 	require.Equal(t, codes.InvalidArgument, grpcStatus.Code())
+}
+
+func TestShouldReturnInternalStatusWithGenericMessageWhenMappingUnexpectedError(t *testing.T) {
+	t.Parallel()
+
+	err := mapError(errors.New("duplicate key value violates unique constraint"))
+
+	grpcStatus, ok := status.FromError(err)
+	require.True(t, ok)
+	require.Equal(t, codes.Internal, grpcStatus.Code())
+	require.Equal(t, "internal error", grpcStatus.Message())
 }

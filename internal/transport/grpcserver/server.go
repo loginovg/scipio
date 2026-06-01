@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	sagav1 "scipio/gen/proto"
@@ -27,7 +28,7 @@ func New(svc *service.Service) *Server {
 func (s *Server) StartSaga(ctx context.Context, req *sagav1.StartSagaRequest) (*sagav1.StartSagaResponse, error) {
 	id, err := s.svc.StartSaga(ctx, req.GetWorkflow(), req.GetContext(), mapStartSagaSteps(req.GetSteps()))
 	if err != nil {
-		return nil, mapError(err)
+		return nil, mapServerError(ctx, "StartSaga", err)
 	}
 
 	return &sagav1.StartSagaResponse{Id: id}, nil
@@ -36,12 +37,12 @@ func (s *Server) StartSaga(ctx context.Context, req *sagav1.StartSagaRequest) (*
 func (s *Server) GetSaga(ctx context.Context, req *sagav1.GetSagaRequest) (*sagav1.GetSagaResponse, error) {
 	saga, err := s.svc.GetSaga(ctx, req.GetId())
 	if err != nil {
-		return nil, mapError(err)
+		return nil, mapServerError(ctx, "GetSaga", err)
 	}
 
 	mappedSaga, mapErr := mapSaga(saga)
 	if mapErr != nil {
-		return nil, mapError(mapErr)
+		return nil, mapServerError(ctx, "GetSaga", mapErr)
 	}
 
 	return &sagav1.GetSagaResponse{Saga: mappedSaga}, nil
@@ -50,12 +51,12 @@ func (s *Server) GetSaga(ctx context.Context, req *sagav1.GetSagaRequest) (*saga
 func (s *Server) CancelSaga(ctx context.Context, req *sagav1.CancelSagaRequest) (*sagav1.CancelSagaResponse, error) {
 	saga, err := s.svc.CancelSaga(ctx, req.GetId())
 	if err != nil {
-		return nil, mapError(err)
+		return nil, mapServerError(ctx, "CancelSaga", err)
 	}
 
 	mappedSaga, mapErr := mapSaga(saga)
 	if mapErr != nil {
-		return nil, mapError(mapErr)
+		return nil, mapServerError(ctx, "CancelSaga", mapErr)
 	}
 
 	return &sagav1.CancelSagaResponse{Saga: mappedSaga}, nil
@@ -73,8 +74,17 @@ func mapError(err error) error {
 		errors.Is(err, service.ErrInvalidStepGRPCTarget):
 		return status.Error(codes.InvalidArgument, err.Error())
 	default:
-		return status.Error(codes.Internal, err.Error())
+		return status.Error(codes.Internal, "internal error")
 	}
+}
+
+func mapServerError(ctx context.Context, operation string, err error) error {
+	mappedErr := mapError(err)
+	if status.Code(mappedErr) == codes.Internal {
+		slog.ErrorContext(ctx, "grpc request failed", "operation", operation, "error", err)
+	}
+
+	return mappedErr
 }
 
 func mapSaga(saga domain.Saga) (*sagav1.Saga, error) {
