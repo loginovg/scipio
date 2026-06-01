@@ -2,6 +2,7 @@ package workerpool
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -162,5 +163,50 @@ func TestShouldSucceedWhenShutdownCalledConcurrentlyMultipleTimes(t *testing.T) 
 		for err := range errs {
 			require.NoError(t, err)
 		}
+	})
+}
+
+func TestShouldReturnErrWorkerPanicWhenTaskHandlerPanics(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		p := New[int, int](1, func(_ context.Context, task int) (int, error) {
+			if task == 1 {
+				panic("boom")
+			}
+
+			return task * 2, nil
+		})
+
+		require.NoError(t, p.Submit(context.Background(), 1))
+		require.NoError(t, p.Submit(context.Background(), 2))
+
+		gotCh := make(chan []Result[int], 1)
+		go func() {
+			results := make([]Result[int], 0, 2)
+			for result := range p.Results() {
+				results = append(results, result)
+			}
+			gotCh <- results
+		}()
+
+		require.NoError(t, p.Shutdown(context.Background()))
+		results := <-gotCh
+		require.Len(t, results, 2)
+
+		panicResults := 0
+		successResults := 0
+		for _, result := range results {
+			if errors.Is(result.Err, ErrWorkerPanic) {
+				require.Contains(t, result.Err.Error(), "boom")
+				panicResults++
+				continue
+			}
+
+			require.NoError(t, result.Err)
+			require.Equal(t, 4, result.Value)
+			successResults++
+		}
+
+		require.Equal(t, 1, panicResults)
+		require.Equal(t, 1, successResults)
 	})
 }

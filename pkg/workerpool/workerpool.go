@@ -3,10 +3,13 @@ package workerpool
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime/debug"
 	"sync"
 )
 
 var ErrPoolClosed = errors.New("worker pool is closed")
+var ErrWorkerPanic = errors.New("worker handler panicked")
 
 type Result[R any] struct {
 	Value R
@@ -55,8 +58,7 @@ func (p *Pool[T, R]) worker() {
 			p.drainTasks()
 			return
 		case task := <-p.tasks:
-			v, err := p.handler(p.ctx, task)
-			p.results <- Result[R]{Value: v, Err: err}
+			p.results <- p.handleTask(task)
 		}
 	}
 
@@ -66,12 +68,28 @@ func (p *Pool[T, R]) drainTasks() {
 	for {
 		select {
 		case task := <-p.tasks:
-			v, err := p.handler(p.ctx, task)
-			p.results <- Result[R]{Value: v, Err: err}
+			p.results <- p.handleTask(task)
 		default:
 			return
 		}
 	}
+}
+
+func (p *Pool[T, R]) handleTask(task T) Result[R] {
+	var value R
+	var err error
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = fmt.Errorf("%w: %v\n%s", ErrWorkerPanic, recovered, debug.Stack())
+			}
+		}()
+
+		value, err = p.handler(p.ctx, task)
+	}()
+
+	return Result[R]{Value: value, Err: err}
 }
 
 func (p *Pool[T, R]) Submit(ctx context.Context, task T) error {
