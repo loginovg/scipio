@@ -7,7 +7,6 @@ import (
 	"scipio/gen/openapi"
 	"scipio/internal/domain"
 	"scipio/internal/service"
-	"scipio/internal/store"
 
 	"github.com/stretchr/testify/require"
 )
@@ -17,7 +16,7 @@ func TestShouldReturn404WhenGetSagaReturnsNotFound(t *testing.T) {
 
 	srv := New(&stubSagaService{
 		getSagaFn: func(context.Context, string) (domain.Saga, error) {
-			return domain.Saga{}, store.ErrNotFound
+			return domain.Saga{}, service.ErrSagaNotFound
 		},
 	})
 
@@ -26,7 +25,7 @@ func TestShouldReturn404WhenGetSagaReturnsNotFound(t *testing.T) {
 	require.NoError(t, err)
 	notFoundResponse, ok := response.(openapi.GetSaga404JSONResponse)
 	require.True(t, ok)
-	require.Equal(t, store.ErrNotFound.Error(), notFoundResponse.Error)
+	require.Equal(t, service.ErrSagaNotFound.Error(), notFoundResponse.Error)
 }
 
 func TestShouldReturn400WhenListSagasReturnsInvalidPagination(t *testing.T) {

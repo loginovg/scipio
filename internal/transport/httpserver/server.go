@@ -10,7 +10,6 @@ import (
 	"scipio/gen/openapi"
 	"scipio/internal/domain"
 	"scipio/internal/service"
-	"scipio/internal/store"
 
 	middleware "github.com/oapi-codegen/nethttp-middleware"
 )
@@ -118,7 +117,7 @@ func (s *Server) GetSaga(ctx context.Context, request openapi.GetSagaRequestObje
 	saga, err := s.svc.GetSaga(ctx, request.Id)
 	if err != nil {
 		switch {
-		case errors.Is(err, store.ErrNotFound):
+		case errors.Is(err, service.ErrSagaNotFound):
 			return openapi.GetSaga404JSONResponse{Error: err.Error()}, nil
 		default:
 			return openapi.GetSaga500JSONResponse{Error: err.Error()}, nil
@@ -132,7 +131,7 @@ func (s *Server) CancelSaga(ctx context.Context, request openapi.CancelSagaReque
 	saga, err := s.svc.CancelSaga(ctx, request.Id)
 	if err != nil {
 		switch {
-		case errors.Is(err, store.ErrNotFound):
+		case errors.Is(err, service.ErrSagaNotFound):
 			return openapi.CancelSaga404JSONResponse{Error: err.Error()}, nil
 		default:
 			return openapi.CancelSaga500JSONResponse{Error: err.Error()}, nil

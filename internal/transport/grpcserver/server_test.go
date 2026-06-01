@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"scipio/internal/service"
-	"scipio/internal/store"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -12,10 +11,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldReturnNotFoundStatusWhenMappingStoreNotFoundError(t *testing.T) {
+func TestShouldReturnNotFoundStatusWhenMappingServiceNotFoundError(t *testing.T) {
 	t.Parallel()
 
-	err := mapError(store.ErrNotFound)
+	err := mapError(service.ErrSagaNotFound)
 
 	grpcStatus, ok := status.FromError(err)
 	require.True(t, ok)

@@ -10,7 +10,6 @@ import (
 	sagav1 "scipio/gen/proto"
 	"scipio/internal/domain"
 	"scipio/internal/service"
-	"scipio/internal/store"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -64,7 +63,7 @@ func (s *Server) CancelSaga(ctx context.Context, req *sagav1.CancelSagaRequest) 
 
 func mapError(err error) error {
 	switch {
-	case errors.Is(err, store.ErrNotFound):
+	case errors.Is(err, service.ErrSagaNotFound):
 		return status.Error(codes.NotFound, err.Error())
 	case errors.Is(err, service.ErrInvalidWorkflow),
 		errors.Is(err, service.ErrInvalidContext),

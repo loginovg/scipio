@@ -13,6 +13,7 @@ import (
 	"scipio/internal/domain"
 	"scipio/internal/lock"
 	"scipio/internal/statemachine"
+	"scipio/internal/store"
 )
 
 var ErrInvalidWorkflow = errors.New("workflow must not be empty")
@@ -24,6 +25,7 @@ var ErrInvalidStatusFilter = errors.New("invalid status filter")
 var ErrInvalidPagination = errors.New("invalid pagination")
 var ErrStoreNotConfigured = errors.New("saga store is not configured")
 var ErrCompensationNotImplemented = errors.New("saga compensation is not implemented")
+var ErrSagaNotFound = errors.New("saga not found")
 
 const (
 	defaultPageLimit = 50
@@ -105,7 +107,12 @@ func (s *Service) GetSaga(ctx context.Context, sagaID string) (domain.Saga, erro
 		return domain.Saga{}, ErrStoreNotConfigured
 	}
 
-	return s.store.Get(ctx, sagaID)
+	saga, err := s.store.Get(ctx, sagaID)
+	if err != nil {
+		return domain.Saga{}, mapStoreError(err)
+	}
+
+	return saga, nil
 }
 
 func (s *Service) CancelSaga(ctx context.Context, sagaID string) (domain.Saga, error) {
@@ -141,7 +148,7 @@ func (s *Service) CancelSaga(ctx context.Context, sagaID string) (domain.Saga, e
 		// TODO: implement backward compensation later
 		return ErrCompensationNotImplemented
 	}); err != nil {
-		return domain.Saga{}, err
+		return domain.Saga{}, mapStoreError(err)
 	}
 
 	return saga, nil
@@ -168,6 +175,14 @@ func (s *Service) ListSagas(ctx context.Context, status string, limit int, offse
 	}
 
 	return s.store.List(ctx, &parsedStatus, normalizedLimit, normalizedOffset)
+}
+
+func mapStoreError(err error) error {
+	if errors.Is(err, store.ErrNotFound) {
+		return ErrSagaNotFound
+	}
+
+	return err
 }
 
 func parseContext(rawContext []byte) (map[string]any, error) {

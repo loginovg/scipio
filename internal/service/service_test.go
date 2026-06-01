@@ -276,7 +276,7 @@ func TestShouldReturnErrNotFoundWhenSagaDoesNotExist(t *testing.T) {
 	_, err := svc.GetSaga(context.Background(), "missing")
 
 	// then
-	require.ErrorIs(t, err, store.ErrNotFound)
+	require.ErrorIs(t, err, ErrSagaNotFound)
 }
 
 func TestShouldReturnLockErrorWhenSagaLockAcquisitionFailsDuringCancel(t *testing.T) {
