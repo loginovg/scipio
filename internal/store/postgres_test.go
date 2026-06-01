@@ -1,9 +1,12 @@
 package store
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"scipio/internal/domain"
 	storesqlc "scipio/internal/store/sqlc"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -137,4 +140,111 @@ func TestShouldReturnErrorWhenStepRowsForUpdateContainUnsupportedStatus(t *testi
 
 	require.Nil(t, steps)
 	require.Error(t, err)
+}
+
+func TestShouldUpsertEachStepAndDeleteTailWhenReplacingSteps(t *testing.T) {
+	t.Parallel()
+
+	// given
+	writer := &capturingStepWriter{}
+	now := time.Now().UTC()
+	steps := []domain.SagaStep{
+		{
+			Name:       "charge",
+			GRPCTarget: "billing:9000",
+			Status:     domain.SagaStepStatusRunning,
+			Attempt:    2,
+			StartedAt:  &now,
+			Error:      "temporary",
+		},
+		{
+			Name:       "reserve",
+			GRPCTarget: "inventory:9000",
+			Status:     domain.SagaStepStatusPending,
+		},
+	}
+
+	// when
+	err := replaceSteps(context.Background(), writer, "saga-1", steps)
+
+	// then
+	require.NoError(t, err)
+	require.Len(t, writer.upserts, 2)
+	require.Equal(t, "saga-1", writer.upserts[0].SagaID)
+	require.Equal(t, int32(0), writer.upserts[0].StepIndex)
+	require.Equal(t, "charge", writer.upserts[0].Name)
+	require.Equal(t, int32(2), writer.upserts[0].Attempt)
+	require.Equal(t, "saga-1", writer.deletedFromIndex.SagaID)
+	require.Equal(t, int32(2), writer.deletedFromIndex.StepIndex)
+}
+
+func TestShouldReturnUpsertErrorWhenUpsertSagaStepFailsWhileReplacingSteps(t *testing.T) {
+	t.Parallel()
+
+	// given
+	expectedErr := errors.New("upsert failed")
+	writer := &capturingStepWriter{
+		upsertErrAtIndex: map[int]error{
+			1: expectedErr,
+		},
+	}
+	steps := []domain.SagaStep{
+		{Name: "first", GRPCTarget: "first:9000", Status: domain.SagaStepStatusPending},
+		{Name: "second", GRPCTarget: "second:9000", Status: domain.SagaStepStatusPending},
+	}
+
+	// when
+	err := replaceSteps(context.Background(), writer, "saga-1", steps)
+
+	// then
+	require.ErrorIs(t, err, expectedErr)
+	require.Len(t, writer.upserts, 2)
+	require.Equal(t, storesqlc.DeleteSagaStepsFromIndexParams{}, writer.deletedFromIndex)
+}
+
+func TestShouldReturnDeleteErrorWhenDeleteSagaStepsFromIndexFailsWhileReplacingSteps(t *testing.T) {
+	t.Parallel()
+
+	// given
+	expectedErr := errors.New("delete failed")
+	writer := &capturingStepWriter{
+		deleteErr: expectedErr,
+	}
+	steps := []domain.SagaStep{
+		{Name: "first", GRPCTarget: "first:9000", Status: domain.SagaStepStatusPending},
+	}
+
+	// when
+	err := replaceSteps(context.Background(), writer, "saga-1", steps)
+
+	// then
+	require.ErrorIs(t, err, expectedErr)
+	require.Len(t, writer.upserts, 1)
+	require.Equal(t, "saga-1", writer.deletedFromIndex.SagaID)
+	require.Equal(t, int32(1), writer.deletedFromIndex.StepIndex)
+}
+
+type capturingStepWriter struct {
+	upserts          []storesqlc.UpsertSagaStepParams
+	upsertErrAtIndex map[int]error
+	deletedFromIndex storesqlc.DeleteSagaStepsFromIndexParams
+	deleteErr        error
+}
+
+func (w *capturingStepWriter) UpsertSagaStep(_ context.Context, arg storesqlc.UpsertSagaStepParams) error {
+	w.upserts = append(w.upserts, arg)
+	if w.upsertErrAtIndex == nil {
+		return nil
+	}
+
+	if err, ok := w.upsertErrAtIndex[len(w.upserts)-1]; ok {
+		return err
+	}
+
+	return nil
+}
+
+func (w *capturingStepWriter) DeleteSagaStepsFromIndex(_ context.Context, arg storesqlc.DeleteSagaStepsFromIndexParams) error {
+	w.deletedFromIndex = arg
+	return w.deleteErr
 }

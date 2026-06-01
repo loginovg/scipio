@@ -34,11 +34,12 @@ WHERE status = $1
 ORDER BY created_at ASC, id ASC
 LIMIT $2 OFFSET $3;
 
--- name: DeleteSagaSteps :exec
+-- name: DeleteSagaStepsFromIndex :exec
 DELETE FROM saga_steps
-WHERE saga_id = $1;
+WHERE saga_id = $1
+  AND step_index >= $2;
 
--- name: InsertSagaStep :exec
+-- name: UpsertSagaStep :exec
 INSERT INTO saga_steps (
     saga_id,
     step_index,
@@ -49,9 +50,28 @@ INSERT INTO saga_steps (
     started_at,
     finished_at,
     error,
-    created_at,
     updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW());
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+ON CONFLICT (saga_id, step_index) DO UPDATE
+SET
+    name = EXCLUDED.name,
+    grpc_target = EXCLUDED.grpc_target,
+    status = EXCLUDED.status,
+    attempt = EXCLUDED.attempt,
+    started_at = EXCLUDED.started_at,
+    finished_at = EXCLUDED.finished_at,
+    error = EXCLUDED.error,
+    updated_at = CASE
+        WHEN saga_steps.name IS DISTINCT FROM EXCLUDED.name
+            OR saga_steps.grpc_target IS DISTINCT FROM EXCLUDED.grpc_target
+            OR saga_steps.status IS DISTINCT FROM EXCLUDED.status
+            OR saga_steps.attempt IS DISTINCT FROM EXCLUDED.attempt
+            OR saga_steps.started_at IS DISTINCT FROM EXCLUDED.started_at
+            OR saga_steps.finished_at IS DISTINCT FROM EXCLUDED.finished_at
+            OR saga_steps.error IS DISTINCT FROM EXCLUDED.error
+        THEN NOW()
+        ELSE saga_steps.updated_at
+    END;
 
 -- name: GetSagaSteps :many
 SELECT name, grpc_target, status, attempt, started_at, finished_at, error

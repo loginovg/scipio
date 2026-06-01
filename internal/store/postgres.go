@@ -31,8 +31,8 @@ type stepReader interface {
 }
 
 type stepWriter interface {
-	DeleteSagaSteps(ctx context.Context, sagaID string) error
-	InsertSagaStep(ctx context.Context, arg storesqlc.InsertSagaStepParams) error
+	DeleteSagaStepsFromIndex(ctx context.Context, arg storesqlc.DeleteSagaStepsFromIndexParams) error
+	UpsertSagaStep(ctx context.Context, arg storesqlc.UpsertSagaStepParams) error
 }
 
 func NewPostgres(ctx context.Context, connectionString string) (*Postgres, error) {
@@ -377,12 +377,8 @@ func mapStepRow(
 }
 
 func replaceSteps(ctx context.Context, writer stepWriter, sagaID string, steps []domain.SagaStep) error {
-	if err := writer.DeleteSagaSteps(ctx, sagaID); err != nil {
-		return err
-	}
-
 	for index, step := range steps {
-		if err := writer.InsertSagaStep(ctx, storesqlc.InsertSagaStepParams{
+		if err := writer.UpsertSagaStep(ctx, storesqlc.UpsertSagaStepParams{
 			SagaID:     sagaID,
 			StepIndex:  int32(index),
 			Name:       step.Name,
@@ -397,7 +393,10 @@ func replaceSteps(ctx context.Context, writer stepWriter, sagaID string, steps [
 		}
 	}
 
-	return nil
+	return writer.DeleteSagaStepsFromIndex(ctx, storesqlc.DeleteSagaStepsFromIndexParams{
+		SagaID:    sagaID,
+		StepIndex: int32(len(steps)),
+	})
 }
 
 func rollbackTx(ctx context.Context, tx pgx.Tx) {

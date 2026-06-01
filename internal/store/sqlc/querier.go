@@ -13,15 +13,15 @@ import (
 type Querier interface {
 	ClaimNextStep(ctx context.Context, updatedAt pgtype.Timestamptz) (ClaimNextStepRow, error)
 	CreateSaga(ctx context.Context, arg CreateSagaParams) error
-	DeleteSagaSteps(ctx context.Context, sagaID string) error
+	DeleteSagaStepsFromIndex(ctx context.Context, arg DeleteSagaStepsFromIndexParams) error
 	GetSaga(ctx context.Context, id string) (Saga, error)
 	GetSagaForUpdate(ctx context.Context, id string) (Saga, error)
 	GetSagaSteps(ctx context.Context, sagaID string) ([]GetSagaStepsRow, error)
 	GetSagaStepsForUpdate(ctx context.Context, sagaID string) ([]GetSagaStepsForUpdateRow, error)
-	InsertSagaStep(ctx context.Context, arg InsertSagaStepParams) error
 	ListSagas(ctx context.Context, arg ListSagasParams) ([]Saga, error)
 	ListSagasByStatus(ctx context.Context, arg ListSagasByStatusParams) ([]Saga, error)
 	UpdateSaga(ctx context.Context, arg UpdateSagaParams) error
+	UpsertSagaStep(ctx context.Context, arg UpsertSagaStepParams) error
 }
 
 var _ Querier = (*Queries)(nil)

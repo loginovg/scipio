@@ -91,13 +91,19 @@ func (q *Queries) CreateSaga(ctx context.Context, arg CreateSagaParams) error {
 	return err
 }
 
-const deleteSagaSteps = `-- name: DeleteSagaSteps :exec
+const deleteSagaStepsFromIndex = `-- name: DeleteSagaStepsFromIndex :exec
 DELETE FROM saga_steps
 WHERE saga_id = $1
+  AND step_index >= $2
 `
 
-func (q *Queries) DeleteSagaSteps(ctx context.Context, sagaID string) error {
-	_, err := q.db.Exec(ctx, deleteSagaSteps, sagaID)
+type DeleteSagaStepsFromIndexParams struct {
+	SagaID    string
+	StepIndex int32
+}
+
+func (q *Queries) DeleteSagaStepsFromIndex(ctx context.Context, arg DeleteSagaStepsFromIndexParams) error {
+	_, err := q.db.Exec(ctx, deleteSagaStepsFromIndex, arg.SagaID, arg.StepIndex)
 	return err
 }
 
@@ -233,49 +239,6 @@ func (q *Queries) GetSagaStepsForUpdate(ctx context.Context, sagaID string) ([]G
 	return items, nil
 }
 
-const insertSagaStep = `-- name: InsertSagaStep :exec
-INSERT INTO saga_steps (
-    saga_id,
-    step_index,
-    name,
-    grpc_target,
-    status,
-    attempt,
-    started_at,
-    finished_at,
-    error,
-    created_at,
-    updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
-`
-
-type InsertSagaStepParams struct {
-	SagaID     string
-	StepIndex  int32
-	Name       string
-	GrpcTarget string
-	Status     string
-	Attempt    int32
-	StartedAt  pgtype.Timestamptz
-	FinishedAt pgtype.Timestamptz
-	Error      pgtype.Text
-}
-
-func (q *Queries) InsertSagaStep(ctx context.Context, arg InsertSagaStepParams) error {
-	_, err := q.db.Exec(ctx, insertSagaStep,
-		arg.SagaID,
-		arg.StepIndex,
-		arg.Name,
-		arg.GrpcTarget,
-		arg.Status,
-		arg.Attempt,
-		arg.StartedAt,
-		arg.FinishedAt,
-		arg.Error,
-	)
-	return err
-}
-
 const listSagas = `-- name: ListSagas :many
 SELECT id, workflow, status, context, created_at, updated_at
 FROM sagas
@@ -380,6 +343,68 @@ func (q *Queries) UpdateSaga(ctx context.Context, arg UpdateSagaParams) error {
 		arg.Status,
 		arg.Context,
 		arg.UpdatedAt,
+	)
+	return err
+}
+
+const upsertSagaStep = `-- name: UpsertSagaStep :exec
+INSERT INTO saga_steps (
+    saga_id,
+    step_index,
+    name,
+    grpc_target,
+    status,
+    attempt,
+    started_at,
+    finished_at,
+    error,
+    updated_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+ON CONFLICT (saga_id, step_index) DO UPDATE
+SET
+    name = EXCLUDED.name,
+    grpc_target = EXCLUDED.grpc_target,
+    status = EXCLUDED.status,
+    attempt = EXCLUDED.attempt,
+    started_at = EXCLUDED.started_at,
+    finished_at = EXCLUDED.finished_at,
+    error = EXCLUDED.error,
+    updated_at = CASE
+        WHEN saga_steps.name IS DISTINCT FROM EXCLUDED.name
+            OR saga_steps.grpc_target IS DISTINCT FROM EXCLUDED.grpc_target
+            OR saga_steps.status IS DISTINCT FROM EXCLUDED.status
+            OR saga_steps.attempt IS DISTINCT FROM EXCLUDED.attempt
+            OR saga_steps.started_at IS DISTINCT FROM EXCLUDED.started_at
+            OR saga_steps.finished_at IS DISTINCT FROM EXCLUDED.finished_at
+            OR saga_steps.error IS DISTINCT FROM EXCLUDED.error
+        THEN NOW()
+        ELSE saga_steps.updated_at
+    END
+`
+
+type UpsertSagaStepParams struct {
+	SagaID     string
+	StepIndex  int32
+	Name       string
+	GrpcTarget string
+	Status     string
+	Attempt    int32
+	StartedAt  pgtype.Timestamptz
+	FinishedAt pgtype.Timestamptz
+	Error      pgtype.Text
+}
+
+func (q *Queries) UpsertSagaStep(ctx context.Context, arg UpsertSagaStepParams) error {
+	_, err := q.db.Exec(ctx, upsertSagaStep,
+		arg.SagaID,
+		arg.StepIndex,
+		arg.Name,
+		arg.GrpcTarget,
+		arg.Status,
+		arg.Attempt,
+		arg.StartedAt,
+		arg.FinishedAt,
+		arg.Error,
 	)
 	return err
 }
