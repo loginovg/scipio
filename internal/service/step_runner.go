@@ -29,7 +29,12 @@ type StepRunner struct {
 	staleAfter   time.Duration
 	dispatcher   stepDispatcher
 	sagaLocker   sagaLocker
-	pool         *workerpool.Pool[domain.ClaimedSagaStep, struct{}]
+	pool         *workerpool.Pool[domain.ClaimedSagaStep, stepExecutionResult]
+}
+
+type stepExecutionResult struct {
+	SagaID    string
+	StepIndex int
 }
 
 func NewStepRunner(
@@ -66,8 +71,11 @@ func NewStepRunner(
 		sagaLocker:   newSagaLocker(locker, lockTTL),
 	}
 
-	runner.pool = workerpool.New[domain.ClaimedSagaStep, struct{}](workers, func(ctx context.Context, step domain.ClaimedSagaStep) (struct{}, error) {
-		return struct{}{}, runner.processClaimedStep(ctx, step)
+	runner.pool = workerpool.New[domain.ClaimedSagaStep, stepExecutionResult](workers, func(ctx context.Context, step domain.ClaimedSagaStep) (stepExecutionResult, error) {
+		return stepExecutionResult{
+			SagaID:    step.SagaID,
+			StepIndex: step.StepIndex,
+		}, runner.processClaimedStep(ctx, step)
 	})
 
 	return runner, nil
@@ -83,7 +91,7 @@ func (r *StepRunner) Run(ctx context.Context) error {
 		defer close(resultsDone)
 		for res := range r.pool.Results() {
 			if res.Err != nil {
-				slog.WarnContext(ctx, "step execution failed", "error", res.Err)
+				slog.WarnContext(ctx, "step execution failed", "saga_id", res.Value.SagaID, "step_index", res.Value.StepIndex, "error", res.Err)
 			}
 		}
 	}()
