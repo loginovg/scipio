@@ -89,7 +89,7 @@ func TestShouldRecoverRunningStepWhenRunnerDetectsStaleExecution(t *testing.T) {
 	require.NoError(t, createErr)
 
 	dispatcher := &capturingStepDispatcher{}
-	runner, newRunnerErr := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Millisecond, dispatcher)
+	runner, newRunnerErr := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, 100*time.Millisecond, dispatcher)
 	require.NoError(t, newRunnerErr)
 	runnerCtx, cancel := context.WithCancel(context.Background())
 	runnerDone := make(chan struct{})
