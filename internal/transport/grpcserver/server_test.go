@@ -32,6 +32,16 @@ func TestShouldReturnInvalidArgumentStatusWhenMappingServiceValidationError(t *t
 	require.Equal(t, codes.InvalidArgument, grpcStatus.Code())
 }
 
+func TestShouldReturnAbortedStatusWhenMappingSagaLockContendedError(t *testing.T) {
+	t.Parallel()
+
+	err := mapError(service.ErrSagaLockContended)
+
+	grpcStatus, ok := status.FromError(err)
+	require.True(t, ok)
+	require.Equal(t, codes.Aborted, grpcStatus.Code())
+}
+
 func TestShouldReturnInternalStatusWithGenericMessageWhenMappingUnexpectedError(t *testing.T) {
 	t.Parallel()
 

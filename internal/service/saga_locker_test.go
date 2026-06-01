@@ -20,6 +20,13 @@ func (l watchdogTestLocker) Acquire(_ context.Context, _ string, _ time.Duration
 	return l.handle, nil
 }
 
+type blockingAcquireLocker struct{}
+
+func (blockingAcquireLocker) Acquire(ctx context.Context, _ string, _ time.Duration) (lock.Handle, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
 type watchdogTestHandle struct {
 	mu          sync.Mutex
 	extendCalls int
@@ -103,4 +110,16 @@ func TestShouldReturnRenewErrorWhenWatchdogCannotExtendLock(t *testing.T) {
 	default:
 		t.Fatal("expected lock handle to be released")
 	}
+}
+
+func TestShouldReturnErrLockContendedWhenAcquireTimesOutWithoutRequestDeadline(t *testing.T) {
+	t.Parallel()
+
+	locker := newSagaLocker(blockingAcquireLocker{}, 20*time.Millisecond)
+
+	err := locker.withSagaLock(context.Background(), "saga-1", func(context.Context) error {
+		return nil
+	})
+
+	require.ErrorIs(t, err, lock.ErrLockContended)
 }

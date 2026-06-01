@@ -133,6 +133,8 @@ func (s *Server) CancelSaga(ctx context.Context, request openapi.CancelSagaReque
 		switch {
 		case errors.Is(err, service.ErrSagaNotFound):
 			return openapi.CancelSaga404JSONResponse{Error: err.Error()}, nil
+		case errors.Is(err, service.ErrSagaLockContended):
+			return openapi.CancelSaga409JSONResponse{Error: err.Error()}, nil
 		default:
 			return openapi.CancelSaga500JSONResponse{Error: err.Error()}, nil
 		}

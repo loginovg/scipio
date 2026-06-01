@@ -26,8 +26,14 @@ func newSagaLocker(locker lock.Locker, lockTTL time.Duration) sagaLocker {
 }
 
 func (s sagaLocker) withSagaLock(ctx context.Context, sagaID string, fn func(context.Context) error) error {
-	handle, err := s.locker.Acquire(ctx, sagaID, s.lockTTL)
+	acquireCtx, cancelAcquire, hasLocalDeadline := lockAcquireContext(ctx, s.lockTTL)
+	defer cancelAcquire()
+
+	handle, err := s.locker.Acquire(acquireCtx, sagaID, s.lockTTL)
 	if err != nil {
+		if isLockContended(err, ctx, hasLocalDeadline) {
+			return lock.ErrLockContended
+		}
 		return err
 	}
 	defer releaseSagaLock(handle, sagaID)
@@ -138,4 +144,34 @@ func lockRenewTimeout(lockTTL time.Duration) time.Duration {
 	}
 
 	return timeout
+}
+
+func lockAcquireContext(ctx context.Context, lockTTL time.Duration) (context.Context, context.CancelFunc, bool) {
+	if _, hasDeadline := ctx.Deadline(); hasDeadline {
+		return ctx, func() {}, false
+	}
+
+	acquireCtx, cancel := context.WithTimeout(ctx, lockAcquireTimeout(lockTTL))
+	return acquireCtx, cancel, true
+}
+
+func lockAcquireTimeout(lockTTL time.Duration) time.Duration {
+	timeout := lockTTL
+	if timeout <= 0 {
+		return time.Nanosecond
+	}
+
+	return timeout
+}
+
+func isLockContended(err error, requestCtx context.Context, hasLocalDeadline bool) bool {
+	if !hasLocalDeadline {
+		return false
+	}
+
+	if requestCtx.Err() != nil {
+		return false
+	}
+
+	return errors.Is(err, context.DeadlineExceeded)
 }

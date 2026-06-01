@@ -353,6 +353,23 @@ func TestShouldReturnLockErrorWhenSagaLockAcquisitionFailsDuringCancel(t *testin
 	require.ErrorIs(t, cancelErr, lockErr)
 }
 
+func TestShouldReturnErrSagaLockContendedWhenSagaLockAcquisitionTimesOutDuringCancel(t *testing.T) {
+	t.Parallel()
+
+	// given
+	svc, newErr := New(store.NewMemory(), failingLocker{err: lock.ErrLockContended}, time.Second)
+	require.NoError(t, newErr)
+
+	sagaID, err := svc.StartSaga(context.Background(), "order_flow", []byte(`{}`), startSteps("order_flow"))
+	require.NoError(t, err)
+
+	// when
+	_, cancelErr := svc.CancelSaga(context.Background(), sagaID)
+
+	// then
+	require.ErrorIs(t, cancelErr, ErrSagaLockContended)
+}
+
 func TestShouldReturnCancelUpdateErrorWhenCancelUpdateFailsDuringCancel(t *testing.T) {
 	t.Parallel()
 

@@ -25,6 +25,7 @@ var ErrInvalidPagination = errors.New("invalid pagination")
 var ErrStoreNotConfigured = errors.New("saga store is not configured")
 var ErrCompensationNotImplemented = errors.New("saga compensation is not implemented")
 var ErrSagaNotFound = errors.New("saga not found")
+var ErrSagaLockContended = errors.New("saga lock is contended")
 
 const (
 	defaultPageLimit = 50
@@ -179,6 +180,9 @@ func (s *Service) ListSagas(ctx context.Context, status string, limit int, offse
 func mapStoreError(err error) error {
 	if errors.Is(err, store.ErrNotFound) {
 		return ErrSagaNotFound
+	}
+	if errors.Is(err, lock.ErrLockContended) {
+		return ErrSagaLockContended
 	}
 
 	return err

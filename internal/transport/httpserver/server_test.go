@@ -45,6 +45,23 @@ func TestShouldReturn400WhenListSagasReturnsInvalidPagination(t *testing.T) {
 	require.Equal(t, service.ErrInvalidPagination.Error(), badRequestResponse.Error)
 }
 
+func TestShouldReturn409WhenCancelSagaReturnsLockContended(t *testing.T) {
+	t.Parallel()
+
+	srv := New(&stubSagaService{
+		cancelSagaFn: func(context.Context, string) (domain.Saga, error) {
+			return domain.Saga{}, service.ErrSagaLockContended
+		},
+	})
+
+	response, err := srv.CancelSaga(context.Background(), openapi.CancelSagaRequestObject{Id: "busy"})
+
+	require.NoError(t, err)
+	conflictResponse, ok := response.(openapi.CancelSaga409JSONResponse)
+	require.True(t, ok)
+	require.Equal(t, service.ErrSagaLockContended.Error(), conflictResponse.Error)
+}
+
 type stubSagaService struct {
 	startSagaFn  func(ctx context.Context, workflow string, rawContext []byte, steps []service.StartSagaStep) (string, error)
 	getSagaFn    func(ctx context.Context, sagaID string) (domain.Saga, error)

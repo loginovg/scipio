@@ -2,8 +2,11 @@ package lock
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+var ErrLockContended = errors.New("lock is contended")
 
 type Handle interface {
 	Release(ctx context.Context) error
