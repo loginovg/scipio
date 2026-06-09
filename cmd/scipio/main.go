@@ -4,14 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -23,78 +20,100 @@ import (
 	"scipio/internal/store"
 	"scipio/internal/transport/grpcserver"
 	"scipio/internal/transport/httpserver"
+	sqlschema "scipio/sql"
 
 	"google.golang.org/grpc"
 )
 
+const shutdownTimeout = 5 * time.Second
+const httpReadHeaderTimeout = 5 * time.Second
+const httpReadTimeout = 30 * time.Second
+const httpWriteTimeout = 30 * time.Second
+const httpIdleTimeout = 2 * time.Minute
+
+type grpcGracefulStopper interface {
+	GracefulStop()
+	Stop()
+}
+
+type httpShutdowner interface {
+	Shutdown(ctx context.Context) error
+}
+
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	cfg := config.Load()
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	if err := run(); err != nil {
+		slog.Error("failed to run scipio", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to parse config: %w", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	postgresStore, err := store.NewPostgres(ctx, cfg.PostgresConnectionString)
 	if err != nil {
-		logger.Error("failed to initialize postgres store", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to initialize postgres store: %w", err)
 	}
 	defer postgresStore.Close()
 
-	migrationFiles, err := loadMigrationFiles(cfg.MigrationsPath)
+	schemaSQL, err := loadEmbeddedSchemaSQL()
 	if err != nil {
-		logger.Error("failed to load migrations", "path", cfg.MigrationsPath, "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to load embedded schema: %w", err)
 	}
 
-	for _, migrationFile := range migrationFiles {
-		migrationSQL, readErr := os.ReadFile(migrationFile)
-		if readErr != nil {
-			logger.Error("failed to read migration file", "path", migrationFile, "error", readErr)
-			os.Exit(1)
-		}
-
-		if migrateErr := postgresStore.Migrate(ctx, string(migrationSQL)); migrateErr != nil {
-			logger.Error("failed to apply migration", "path", migrationFile, "error", migrateErr)
-			os.Exit(1)
-		}
+	if err := postgresStore.Migrate(ctx, schemaSQL); err != nil {
+		return fmt.Errorf("failed to apply embedded schema: %w", err)
 	}
 
 	redisLocker, err := lock.NewRedisFromURL(cfg.RedisConnectionString, "scipio:lock:saga:", cfg.LockRetryInterval)
 	if err != nil {
-		logger.Error("failed to initialize redis lock", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to initialize redis lock: %w", err)
 	}
 	defer func() {
 		if closeErr := redisLocker.Close(); closeErr != nil {
-			logger.Error("failed to close redis locker", "error", closeErr)
+			slog.Error("failed to close redis locker", "error", closeErr)
 		}
 	}()
 
-	sagaService := service.NewWithLock(postgresStore, redisLocker, cfg.LockTTL, logger)
-	stepRunner := service.NewStepRunner(
+	sagaService, err := service.New(postgresStore, redisLocker, cfg.LockTTL)
+	if err != nil {
+		return fmt.Errorf("failed to initialize saga service: %w", err)
+	}
+
+	stepRunner, err := service.NewStepRunner(
 		postgresStore,
 		redisLocker,
 		cfg.LockTTL,
 		cfg.StepWorkers,
 		cfg.StepPollInterval,
 		cfg.StepStaleTimeout,
-		logger,
+		nil,
 	)
+	if err != nil {
+		return fmt.Errorf("failed to initialize step runner: %w", err)
+	}
 
 	runnerCtx, runnerCancel := context.WithCancel(context.Background())
+	defer runnerCancel()
 	runnerDone := make(chan struct{})
 	go func() {
 		defer close(runnerDone)
 		if runErr := stepRunner.Run(runnerCtx); runErr != nil {
-			logger.Error("step runner exited", "error", runErr)
+			slog.Error("step runner exited", "error", runErr)
 		}
 	}()
 
 	grpcListen, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.GRPCPort))
 	if err != nil {
-		logger.Error("failed to listen for grpc", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to listen for grpc: %w", err)
 	}
 
 	grpcSrv := grpc.NewServer()
@@ -102,24 +121,19 @@ func main() {
 
 	httpHandler, err := httpserver.New(sagaService).Handler()
 	if err != nil {
-		logger.Error("failed to configure http server", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to configure http server: %w", err)
 	}
 
-	httpSrv := &http.Server{
-		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),
-		Handler:           httpHandler,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
+	httpSrv := newHTTPServer(cfg.HTTPPort, httpHandler)
 
 	errCh := make(chan error, 2)
 	go func() {
-		logger.Info("grpc server started", "port", cfg.GRPCPort)
+		slog.Info("grpc server started", "port", cfg.GRPCPort)
 		errCh <- grpcSrv.Serve(grpcListen)
 	}()
 
 	go func() {
-		logger.Info("http server started", "port", cfg.HTTPPort)
+		slog.Info("http server started", "port", cfg.HTTPPort)
 		errCh <- httpSrv.ListenAndServe()
 	}()
 
@@ -128,67 +142,78 @@ func main() {
 
 	select {
 	case <-signalCtx.Done():
-		logger.Info("shutdown signal received")
+		slog.Info("shutdown signal received")
 	case runErr := <-errCh:
 		if runErr != nil && !errors.Is(runErr, http.ErrServerClosed) {
-			logger.Error("server exited", "error", runErr)
+			slog.Error("server exited", "error", runErr)
 		}
 	}
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer shutdownCancel()
+	shutdownRuntime(grpcSrv, httpSrv, runnerCancel, runnerDone)
+
+	return nil
+}
+
+func shutdownRuntime(grpcSrv grpcGracefulStopper, httpSrv httpShutdowner, runnerCancel context.CancelFunc, runnerDone <-chan struct{}) {
+	shutdownRuntimeWithTimeouts(grpcSrv, httpSrv, runnerCancel, runnerDone, shutdownTimeout, shutdownTimeout, shutdownTimeout)
+}
+
+func shutdownRuntimeWithTimeouts(
+	grpcSrv grpcGracefulStopper,
+	httpSrv httpShutdowner,
+	runnerCancel context.CancelFunc,
+	runnerDone <-chan struct{},
+	grpcTimeout time.Duration,
+	httpTimeout time.Duration,
+	runnerTimeout time.Duration,
+) {
+	grpcCtx, cancelGRPC := context.WithTimeout(context.Background(), grpcTimeout)
+	grpcDone := make(chan struct{})
+	go func() {
+		defer close(grpcDone)
+		grpcSrv.GracefulStop()
+	}()
+
+	select {
+	case <-grpcDone:
+	case <-grpcCtx.Done():
+		slog.Warn("grpc graceful shutdown timed out")
+		grpcSrv.Stop()
+	}
+	cancelGRPC()
+
+	httpCtx, cancelHTTP := context.WithTimeout(context.Background(), httpTimeout)
+	if shutdownErr := httpSrv.Shutdown(httpCtx); shutdownErr != nil {
+		slog.Error("failed to shutdown http server", "error", shutdownErr)
+	}
+	cancelHTTP()
 
 	runnerCancel()
+	runnerCtx, cancelRunner := context.WithTimeout(context.Background(), runnerTimeout)
 	select {
 	case <-runnerDone:
-	case <-shutdownCtx.Done():
-		logger.Warn("step runner shutdown timed out")
+	case <-runnerCtx.Done():
+		slog.Warn("step runner shutdown timed out")
 	}
+	cancelRunner()
+}
 
-	grpcSrv.GracefulStop()
-	if shutdownErr := httpSrv.Shutdown(shutdownCtx); shutdownErr != nil {
-		logger.Error("failed to shutdown http server", "error", shutdownErr)
+func newHTTPServer(port int, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              fmt.Sprintf(":%d", port),
+		Handler:           handler,
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		ReadTimeout:       httpReadTimeout,
+		WriteTimeout:      httpWriteTimeout,
+		IdleTimeout:       httpIdleTimeout,
 	}
 }
 
-func loadMigrationFiles(path string) ([]string, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, err
+func loadEmbeddedSchemaSQL() (string, error) {
+	schemaSQL := sqlschema.SagaSchema()
+	if strings.TrimSpace(schemaSQL) == "" {
+		return "", errors.New("embedded schema is empty")
 	}
 
-	if !info.IsDir() {
-		if strings.EqualFold(filepath.Ext(path), ".sql") {
-			return []string{path}, nil
-		}
-		return nil, fmt.Errorf("migration path is not a sql file: %s", path)
-	}
-
-	files := make([]string, 0)
-	walkErr := filepath.WalkDir(path, func(currentPath string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-
-		if entry.IsDir() {
-			return nil
-		}
-
-		if !strings.EqualFold(filepath.Ext(entry.Name()), ".sql") {
-			return nil
-		}
-
-		files = append(files, currentPath)
-		return nil
-	})
-	if walkErr != nil {
-		return nil, walkErr
-	}
-
-	sort.Strings(files)
-	if len(files) == 0 {
-		return nil, fmt.Errorf("no sql migrations found in path: %s", path)
-	}
-
-	return files, nil
+	return schemaSQL, nil
 }

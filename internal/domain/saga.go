@@ -26,6 +26,7 @@ const (
 
 type SagaStep struct {
 	Name       string
+	GRPCTarget string
 	Status     SagaStepStatus
 	Attempt    uint32
 	StartedAt  *time.Time
@@ -101,6 +102,7 @@ func cloneSteps(source []SagaStep) []SagaStep {
 	for index, step := range source {
 		copied[index] = SagaStep{
 			Name:       step.Name,
+			GRPCTarget: step.GRPCTarget,
 			Status:     step.Status,
 			Attempt:    step.Attempt,
 			StartedAt:  copyTime(step.StartedAt),

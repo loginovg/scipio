@@ -2,49 +2,39 @@ package lock
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/go-redsync/redsync/v4"
+	redsyncgoredis "github.com/go-redsync/redsync/v4/redis/goredis/v9"
 	"github.com/redis/go-redis/v9"
 )
 
 var ErrInvalidTTL = errors.New("lock ttl must be positive")
 var ErrInvalidRetryInterval = errors.New("lock retry interval must be positive")
 var ErrInvalidRedisURL = errors.New("redis connection url must not be empty")
+var ErrInvalidPrefix = errors.New("lock prefix must not be empty")
 
-type redisClient interface {
-	SetNX(ctx context.Context, key string, value any, expiration time.Duration) (bool, error)
-	EvalInt64(ctx context.Context, script string, keys []string, args ...any) (int64, error)
-}
-
-type goRedisClient struct {
-	client *redis.Client
+type redisMutex interface {
+	LockContext(ctx context.Context) error
+	UnlockContext(ctx context.Context) (bool, error)
+	ExtendContext(ctx context.Context) (bool, error)
 }
 
 type Redis struct {
-	client        redisClient
+	newMutex      func(name string, options ...redsync.Option) redisMutex
 	prefix        string
 	retryInterval time.Duration
 	closeFn       func() error
 }
 
 type redisHandle struct {
-	client      redisClient
-	key         string
-	token       string
-	ttl         time.Duration
-	renewCancel context.CancelFunc
-	renewDone   chan struct{}
+	mutex       redisMutex
 	releaseOnce sync.Once
 	releaseErr  error
 }
-
-const unlockScript = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end"
-const renewScript = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('PEXPIRE', KEYS[1], ARGV[2]) else return 0 end"
 
 func NewRedisFromURL(redisURL string, prefix string, retryInterval time.Duration) (*Redis, error) {
 	trimmedURL := strings.TrimSpace(redisURL)
@@ -58,27 +48,36 @@ func NewRedisFromURL(redisURL string, prefix string, retryInterval time.Duration
 	}
 
 	client := redis.NewClient(options)
-	return &Redis{
-		client:        goRedisClient{client: client},
-		prefix:        normalizePrefix(prefix),
-		retryInterval: normalizeRetryInterval(retryInterval),
-		closeFn:       client.Close,
-	}, nil
+	return newRedis(client, prefix, retryInterval, client.Close)
 }
 
-func NewRedis(client redisClient, prefix string, retryInterval time.Duration) (*Redis, error) {
+func NewRedis(client redis.UniversalClient, prefix string, retryInterval time.Duration) (*Redis, error) {
 	if client == nil {
 		return nil, errors.New("redis client must not be nil")
+	}
+
+	return newRedis(client, prefix, retryInterval, nil)
+}
+
+func newRedis(client redis.UniversalClient, prefix string, retryInterval time.Duration, closeFn func() error) (*Redis, error) {
+	if strings.TrimSpace(prefix) == "" {
+		return nil, ErrInvalidPrefix
 	}
 
 	if retryInterval <= 0 {
 		return nil, ErrInvalidRetryInterval
 	}
 
+	pool := redsyncgoredis.NewPool(client)
+	syncer := redsync.New(pool)
+
 	return &Redis{
-		client:        client,
-		prefix:        normalizePrefix(prefix),
+		newMutex: func(name string, options ...redsync.Option) redisMutex {
+			return syncer.NewMutex(name, options...)
+		},
+		prefix:        prefix,
 		retryInterval: retryInterval,
+		closeFn:       closeFn,
 	}, nil
 }
 
@@ -87,30 +86,26 @@ func (r *Redis) Acquire(ctx context.Context, key string, ttl time.Duration) (Han
 		return nil, ErrInvalidTTL
 	}
 
-	token, err := randomToken()
-	if err != nil {
-		return nil, err
-	}
-
 	fullKey := r.prefix + key
+	mutex := r.newMutex(
+		fullKey,
+		redsync.WithExpiry(ttl),
+	)
+
 	ticker := time.NewTicker(r.retryInterval)
 	defer ticker.Stop()
 
 	for {
-		acquired, acquireErr := r.client.SetNX(ctx, fullKey, token, ttl)
-		if acquireErr != nil {
-			return nil, acquireErr
-		}
-
-		if acquired {
-			handle := &redisHandle{
-				client: r.client,
-				key:    fullKey,
-				token:  token,
-				ttl:    ttl,
+		if err := mutex.LockContext(ctx); err == nil {
+			return &redisHandle{mutex: mutex}, nil
+		} else {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
 			}
-			handle.startRenewal()
-			return handle, nil
+
+			if !isRaceError(err) {
+				return nil, err
+			}
 		}
 
 		select {
@@ -131,8 +126,10 @@ func (r *Redis) Close() error {
 
 func (h *redisHandle) Release(ctx context.Context) error {
 	h.releaseOnce.Do(func() {
-		h.stopRenewal()
-		_, err := h.client.EvalInt64(ctx, unlockScript, []string{h.key}, h.token)
+		_, err := h.mutex.UnlockContext(ctx)
+		if errors.Is(err, redsync.ErrLockAlreadyExpired) {
+			return
+		}
 		if err != nil {
 			h.releaseErr = err
 		}
@@ -141,107 +138,28 @@ func (h *redisHandle) Release(ctx context.Context) error {
 	return h.releaseErr
 }
 
-func (g goRedisClient) SetNX(ctx context.Context, key string, value any, expiration time.Duration) (bool, error) {
-	return g.client.SetNX(ctx, key, value, expiration).Result()
+func (h *redisHandle) Extend(ctx context.Context) error {
+	extended, err := h.mutex.ExtendContext(ctx)
+	if err != nil {
+		return err
+	}
+	if !extended {
+		return redsync.ErrExtendFailed
+	}
+
+	return nil
 }
 
-func (g goRedisClient) EvalInt64(ctx context.Context, script string, keys []string, args ...any) (int64, error) {
-	return g.client.Eval(ctx, script, keys, args...).Int64()
-}
-
-func normalizePrefix(prefix string) string {
-	trimmed := strings.TrimSpace(prefix)
-	if trimmed == "" {
-		return "scipio:lock:saga:"
+func isRaceError(err error) bool {
+	if errors.Is(err, redsync.ErrFailed) {
+		return true
 	}
 
-	return trimmed
-}
-
-func normalizeRetryInterval(retryInterval time.Duration) time.Duration {
-	if retryInterval <= 0 {
-		return 25 * time.Millisecond
+	var taken *redsync.ErrTaken
+	if errors.As(err, &taken) {
+		return true
 	}
 
-	return retryInterval
-}
-
-func (h *redisHandle) startRenewal() {
-	interval := renewalInterval(h.ttl)
-	if interval <= 0 {
-		return
-	}
-
-	renewCtx, renewCancel := context.WithCancel(context.Background())
-	h.renewCancel = renewCancel
-	h.renewDone = make(chan struct{})
-	go func() {
-		defer close(h.renewDone)
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-renewCtx.Done():
-				return
-			case <-ticker.C:
-				ttlMillis := h.ttl.Milliseconds()
-				if ttlMillis <= 0 {
-					ttlMillis = 1
-				}
-
-				callCtx, cancel := context.WithTimeout(context.Background(), renewalTimeout(h.ttl))
-				result, err := h.client.EvalInt64(callCtx, renewScript, []string{h.key}, h.token, ttlMillis)
-				cancel()
-				if err != nil {
-					continue
-				}
-
-				if result == 0 {
-					return
-				}
-			}
-		}
-	}()
-}
-
-func (h *redisHandle) stopRenewal() {
-	if h.renewCancel != nil {
-		h.renewCancel()
-	}
-
-	if h.renewDone != nil {
-		<-h.renewDone
-	}
-}
-
-func renewalInterval(ttl time.Duration) time.Duration {
-	interval := ttl / 2
-	if interval <= 0 {
-		return time.Millisecond
-	}
-
-	return interval
-}
-
-func renewalTimeout(ttl time.Duration) time.Duration {
-	timeout := ttl / 3
-	if timeout <= 0 {
-		return time.Millisecond
-	}
-
-	if timeout > time.Second {
-		return time.Second
-	}
-
-	return timeout
-}
-
-func randomToken() (string, error) {
-	buffer := make([]byte, 16)
-	if _, err := rand.Read(buffer); err != nil {
-		return "", err
-	}
-
-	return hex.EncodeToString(buffer), nil
+	var nodeTaken *redsync.ErrNodeTaken
+	return errors.As(err, &nodeTaken)
 }

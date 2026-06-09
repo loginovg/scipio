@@ -7,15 +7,16 @@ Scipio is a lightweight Saga orchestrator with gRPC and HTTP interfaces.
 - Start, query, list, and cancel sagas
 - Deterministic saga state transitions
 - PostgreSQL-backed saga persistence via `pgx`
-- Redis distributed saga locking via `redis-go`
+- Redis distributed saga locking via `go-redsync/redsync`
 - gRPC API from `api/proto/saga.proto`
 - HTTP API from `api/openapi/saga.yaml`
 - Multi-instance safe coordination by saga ID
 
-## Run
+## Local Run
 
 ```bash
-make run
+cp .env.dist .env
+make dev
 ```
 
 Environment variables:
@@ -29,7 +30,14 @@ Environment variables:
 - `REDIS_CONN` (default: `redis://127.0.0.1:6380/0`)
 - `SCIPIO_LOCK_TTL` (default: `5s`)
 - `SCIPIO_LOCK_RETRY_INTERVAL` (default: `25ms`)
-- `SCIPIO_MIGRATIONS_PATH` (default: `migrations`)
+
+Useful Make targets:
+
+- `make help`
+- `make up`
+- `make down`
+- `make run`
+- `make build`
 
 ## API
 
@@ -47,21 +55,6 @@ HTTP endpoints:
 - `POST /sagas/{id}/cancel`
 - `GET /healthz`
 
-## Examples
-
-- gRPC example: `examples/grpc/main.go`
-- HTTP example: `examples/http/main.go`
-
-Run examples after starting Scipio:
-
-```bash
-go run ./examples/grpc
-```
-
-```bash
-go run ./examples/http
-```
-
 ## Testing
 
 Unit tests:
@@ -74,6 +67,14 @@ Lint:
 
 ```bash
 make lint
+```
+
+Formatting, vet, race:
+
+```bash
+make fmt
+make vet
+make test-race
 ```
 
 Functional tests with pytest and testcontainers:

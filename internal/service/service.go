@@ -3,24 +3,30 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
 	"scipio/internal/domain"
 	"scipio/internal/lock"
 	"scipio/internal/statemachine"
+	"scipio/internal/store"
 )
 
 var ErrInvalidWorkflow = errors.New("workflow must not be empty")
 var ErrInvalidContext = errors.New("context must be a valid JSON object")
+var ErrStepsRequired = errors.New("steps must not be empty")
+var ErrInvalidStepName = errors.New("step name must not be empty")
+var ErrInvalidStepGRPCTarget = errors.New("step grpc target must not be empty")
 var ErrInvalidStatusFilter = errors.New("invalid status filter")
 var ErrInvalidPagination = errors.New("invalid pagination")
 var ErrStoreNotConfigured = errors.New("saga store is not configured")
+var ErrSagaNotFound = errors.New("saga not found")
+var ErrSagaLockContended = errors.New("saga lock is contended")
+var ErrSagaCancelNotAllowed = errors.New("saga cannot be canceled from current status")
 
 const (
 	defaultPageLimit = 50
@@ -34,63 +40,77 @@ type sagaStore interface {
 	Update(ctx context.Context, id string, fn func(*domain.Saga) error) (domain.Saga, error)
 }
 
+type StartSagaStep struct {
+	Name       string
+	GRPCTarget string
+}
+
 type Service struct {
 	store      sagaStore
 	sagaLocker sagaLocker
 }
 
-func New(store sagaStore, logger *slog.Logger) *Service {
-	return NewWithLock(store, lock.NewNoop(), 5*time.Second, logger)
-}
-
-func NewWithLock(store sagaStore, locker lock.Locker, lockTTL time.Duration, logger *slog.Logger) *Service {
-	if logger == nil {
-		logger = slog.Default()
+func New(store sagaStore, locker lock.Locker, lockTTL time.Duration) (*Service, error) {
+	if lockTTL <= 0 {
+		return nil, lock.ErrInvalidTTL
 	}
 
 	return &Service{
 		store:      store,
-		sagaLocker: newSagaLocker(locker, lockTTL, logger),
-	}
+		sagaLocker: newSagaLocker(locker, lockTTL),
+	}, nil
 }
 
-func (s *Service) StartSaga(ctx context.Context, workflow string, rawContext []byte) (string, error) {
+func (s *Service) StartSaga(ctx context.Context, workflow string, rawContext []byte, steps []StartSagaStep) (string, error) {
+	return s.StartSagaWithIdempotencyKey(ctx, workflow, "", rawContext, steps)
+}
+
+func (s *Service) StartSagaWithIdempotencyKey(ctx context.Context, workflow string, idempotencyKey string, rawContext []byte, steps []StartSagaStep) (string, error) {
 	if s.store == nil {
 		return "", ErrStoreNotConfigured
 	}
 
-	trimmedWorkflow := strings.TrimSpace(workflow)
-	if trimmedWorkflow == "" {
+	if workflow == "" {
 		return "", ErrInvalidWorkflow
 	}
 
-	normalizedContext, err := normalizeContext(rawContext)
+	sagaContext, err := parseContext(rawContext)
 	if err != nil {
 		return "", err
 	}
 
-	sagaID, err := generateSagaID()
+	sagaSteps, err := validateStartSagaSteps(steps)
+	if err != nil {
+		return "", err
+	}
+
+	normalizedIdempotencyKey := strings.TrimSpace(idempotencyKey)
+	sagaID, err := generateSagaID(normalizedIdempotencyKey)
 	if err != nil {
 		return "", err
 	}
 
 	now := time.Now().UTC()
 	saga := domain.Saga{
-		ID:       sagaID,
-		Workflow: trimmedWorkflow,
-		Status:   domain.SagaStatusCreated,
-		Context:  normalizedContext,
-		Steps: []domain.SagaStep{
-			{
-				Name:   trimmedWorkflow,
-				Status: domain.SagaStepStatusPending,
-			},
-		},
+		ID:        sagaID,
+		Workflow:  workflow,
+		Status:    domain.SagaStatusCreated,
+		Context:   sagaContext,
+		Steps:     sagaSteps,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 
 	if createErr := s.store.Create(ctx, saga); createErr != nil {
+		if normalizedIdempotencyKey != "" && errors.Is(createErr, store.ErrAlreadyExists) {
+			existingSaga, getErr := s.store.Get(ctx, sagaID)
+			if getErr != nil {
+				return "", mapStoreError(getErr)
+			}
+
+			return existingSaga.ID, nil
+		}
+
 		return "", createErr
 	}
 
@@ -102,7 +122,12 @@ func (s *Service) GetSaga(ctx context.Context, sagaID string) (domain.Saga, erro
 		return domain.Saga{}, ErrStoreNotConfigured
 	}
 
-	return s.store.Get(ctx, sagaID)
+	saga, err := s.store.Get(ctx, sagaID)
+	if err != nil {
+		return domain.Saga{}, mapStoreError(err)
+	}
+
+	return saga, nil
 }
 
 func (s *Service) CancelSaga(ctx context.Context, sagaID string) (domain.Saga, error) {
@@ -114,12 +139,18 @@ func (s *Service) CancelSaga(ctx context.Context, sagaID string) (domain.Saga, e
 	if err := s.sagaLocker.withSagaLock(ctx, sagaID, func(lockCtx context.Context) error {
 		updatedSaga, updateErr := s.store.Update(lockCtx, sagaID, func(candidate *domain.Saga) error {
 			switch candidate.Status {
-			case domain.SagaStatusCreated, domain.SagaStatusRunning, domain.SagaStatusCompleted:
-				if statemachine.CanTransition(candidate.Status, domain.SagaStatusCanceling) {
+			case domain.SagaStatusCreated, domain.SagaStatusRunning, domain.SagaStatusCompleted, domain.SagaStatusCanceling:
+				if candidate.Status != domain.SagaStatusCanceling {
+					if !statemachine.CanTransition(candidate.Status, domain.SagaStatusCanceling) {
+						return nil
+					}
 					candidate.Status = domain.SagaStatusCanceling
 				}
-			case domain.SagaStatusCanceling, domain.SagaStatusCompensated, domain.SagaStatusFailed:
+				normalizeSagaForCancellation(candidate)
+			case domain.SagaStatusCompensated:
 				return nil
+			case domain.SagaStatusFailed:
+				return ErrSagaCancelNotAllowed
 			default:
 				return nil
 			}
@@ -131,30 +162,53 @@ func (s *Service) CancelSaga(ctx context.Context, sagaID string) (domain.Saga, e
 		}
 
 		saga = updatedSaga
-		if saga.Status != domain.SagaStatusCanceling {
-			return nil
-		}
-
-		compensatedSaga, compensateErr := s.store.Update(lockCtx, sagaID, func(candidate *domain.Saga) error {
-			compensateSagaSteps(candidate)
-			if statemachine.CanTransition(candidate.Status, domain.SagaStatusCompensated) {
-				candidate.Status = domain.SagaStatusCompensated
-			}
-
-			return nil
-		})
-		if compensateErr != nil {
-			s.sagaLocker.logger.ErrorContext(lockCtx, "failed to compensate canceled saga", "saga_id", sagaID, "error", compensateErr)
-			return compensateErr
-		}
-
-		saga = compensatedSaga
 		return nil
 	}); err != nil {
-		return domain.Saga{}, err
+		return domain.Saga{}, mapStoreError(err)
 	}
 
 	return saga, nil
+}
+
+func normalizeSagaForCancellation(candidate *domain.Saga) {
+	now := time.Now().UTC()
+	for index := range candidate.Steps {
+		step := &candidate.Steps[index]
+		if step.Status != domain.SagaStepStatusPending {
+			continue
+		}
+
+		step.Status = domain.SagaStepStatusCompensated
+		step.FinishedAt = &now
+		step.Error = ""
+	}
+
+	if candidate.Status != domain.SagaStatusCanceling {
+		return
+	}
+
+	if hasFailedStep(candidate.Steps) {
+		if statemachine.CanTransition(candidate.Status, domain.SagaStatusFailed) {
+			candidate.Status = domain.SagaStatusFailed
+		}
+		return
+	}
+
+	if !hasPendingCompensationSteps(candidate.Steps) && statemachine.CanTransition(candidate.Status, domain.SagaStatusCompensated) {
+		candidate.Status = domain.SagaStatusCompensated
+	}
+}
+
+func hasPendingCompensationSteps(steps []domain.SagaStep) bool {
+	for _, step := range steps {
+		if step.Status == domain.SagaStepStatusCompleted ||
+			step.Status == domain.SagaStepStatusRunning ||
+			step.Status == domain.SagaStepStatusCompensating {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (s *Service) ListSagas(ctx context.Context, status string, limit int, offset int) ([]domain.Saga, error) {
@@ -162,7 +216,7 @@ func (s *Service) ListSagas(ctx context.Context, status string, limit int, offse
 		return nil, ErrStoreNotConfigured
 	}
 
-	normalizedLimit, normalizedOffset, err := normalizePage(limit, offset)
+	normalizedLimit, normalizedOffset, err := validatePage(limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -172,47 +226,67 @@ func (s *Service) ListSagas(ctx context.Context, status string, limit int, offse
 		return s.store.List(ctx, nil, normalizedLimit, normalizedOffset)
 	}
 
-	parsedStatus, statusErr := ParseSagaStatus(normalizedStatus)
+	parsedStatus, statusErr := domain.ParseSagaStatus(normalizedStatus)
 	if statusErr != nil {
-		return nil, statusErr
+		return nil, ErrInvalidStatusFilter
 	}
 
 	return s.store.List(ctx, &parsedStatus, normalizedLimit, normalizedOffset)
 }
 
-func ParseSagaStatus(raw string) (domain.SagaStatus, error) {
-	status := domain.SagaStatus(strings.ToUpper(strings.TrimSpace(raw)))
-	switch status {
-	case domain.SagaStatusCreated,
-		domain.SagaStatusRunning,
-		domain.SagaStatusCompleted,
-		domain.SagaStatusCanceling,
-		domain.SagaStatusCompensated,
-		domain.SagaStatusFailed:
-		return status, nil
-	default:
-		return "", ErrInvalidStatusFilter
+func mapStoreError(err error) error {
+	if errors.Is(err, store.ErrNotFound) {
+		return ErrSagaNotFound
 	}
+	if errors.Is(err, lock.ErrLockContended) {
+		return ErrSagaLockContended
+	}
+	if errors.Is(err, store.ErrInvalidPagination) {
+		return ErrInvalidPagination
+	}
+
+	return err
 }
 
-func normalizeContext(rawContext []byte) (map[string]any, error) {
-	if len(rawContext) == 0 {
-		return map[string]any{}, nil
-	}
-
-	var parsed map[string]any
-	if err := json.Unmarshal(rawContext, &parsed); err != nil {
+func parseContext(rawContext []byte) (map[string]any, error) {
+	parsed, err := domain.ParseSagaContext(rawContext)
+	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidContext, err)
-	}
-
-	if parsed == nil {
-		return map[string]any{}, nil
 	}
 
 	return parsed, nil
 }
 
-func generateSagaID() (string, error) {
+func validateStartSagaSteps(requested []StartSagaStep) ([]domain.SagaStep, error) {
+	if len(requested) == 0 {
+		return nil, ErrStepsRequired
+	}
+
+	steps := make([]domain.SagaStep, 0, len(requested))
+	for _, requestedStep := range requested {
+		if requestedStep.Name == "" {
+			return nil, ErrInvalidStepName
+		}
+
+		if requestedStep.GRPCTarget == "" {
+			return nil, ErrInvalidStepGRPCTarget
+		}
+
+		steps = append(steps, domain.SagaStep{
+			Name:       requestedStep.Name,
+			GRPCTarget: requestedStep.GRPCTarget,
+			Status:     domain.SagaStepStatusPending,
+		})
+	}
+
+	return steps, nil
+}
+
+func generateSagaID(idempotencyKey string) (string, error) {
+	if idempotencyKey != "" {
+		return generateSagaIDFromIdempotencyKey(idempotencyKey), nil
+	}
+
 	buffer := make([]byte, 16)
 	if _, err := rand.Read(buffer); err != nil {
 		return "", err
@@ -221,7 +295,12 @@ func generateSagaID() (string, error) {
 	return hex.EncodeToString(buffer), nil
 }
 
-func normalizePage(limit int, offset int) (int, int, error) {
+func generateSagaIDFromIdempotencyKey(idempotencyKey string) string {
+	hash := sha256.Sum256([]byte(idempotencyKey))
+	return hex.EncodeToString(hash[:16])
+}
+
+func validatePage(limit int, offset int) (int, int, error) {
 	if offset < 0 {
 		return 0, 0, ErrInvalidPagination
 	}
@@ -239,19 +318,4 @@ func normalizePage(limit int, offset int) (int, int, error) {
 	}
 
 	return limit, offset, nil
-}
-
-func compensateSagaSteps(saga *domain.Saga) {
-	now := time.Now().UTC()
-	for index := range saga.Steps {
-		step := &saga.Steps[index]
-		switch step.Status {
-		case domain.SagaStepStatusCompleted, domain.SagaStepStatusCompensated, domain.SagaStepStatusFailed:
-			continue
-		default:
-			step.Status = domain.SagaStepStatusCompensated
-			step.FinishedAt = &now
-			step.Error = ""
-		}
-	}
 }

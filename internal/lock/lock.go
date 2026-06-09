@@ -2,11 +2,15 @@ package lock
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
+var ErrLockContended = errors.New("lock is contended")
+
 type Handle interface {
 	Release(ctx context.Context) error
+	Extend(ctx context.Context) error
 }
 
 type Locker interface {
@@ -26,5 +30,9 @@ func (Noop) Acquire(_ context.Context, _ string, _ time.Duration) (Handle, error
 }
 
 func (noopHandle) Release(_ context.Context) error {
+	return nil
+}
+
+func (noopHandle) Extend(_ context.Context) error {
 	return nil
 }

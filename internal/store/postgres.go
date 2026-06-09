@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"scipio/internal/domain"
-	storesqlc "scipio/internal/store/sqlc"
+	"scipio/internal/store/sqlc"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -18,19 +19,20 @@ import (
 )
 
 var ErrInvalidPostgresConnectionString = errors.New("postgres connection string must not be empty")
+var ErrInvalidSagaContext = errors.New("saga context must be a non-null JSON object")
 
 type Postgres struct {
 	pool    *pgxpool.Pool
-	queries *storesqlc.Queries
+	queries *sqlc.Queries
 }
 
 type stepReader interface {
-	GetSagaSteps(ctx context.Context, sagaID string) ([]storesqlc.GetSagaStepsRow, error)
+	GetSagaSteps(ctx context.Context, sagaID string) ([]sqlc.GetSagaStepsRow, error)
 }
 
 type stepWriter interface {
-	DeleteSagaSteps(ctx context.Context, sagaID string) error
-	InsertSagaStep(ctx context.Context, arg storesqlc.InsertSagaStepParams) error
+	DeleteSagaStepsFromIndex(ctx context.Context, arg sqlc.DeleteSagaStepsFromIndexParams) error
+	UpsertSagaStep(ctx context.Context, arg sqlc.UpsertSagaStepParams) error
 }
 
 func NewPostgres(ctx context.Context, connectionString string) (*Postgres, error) {
@@ -49,7 +51,7 @@ func NewPostgres(ctx context.Context, connectionString string) (*Postgres, error
 		return nil, pingErr
 	}
 
-	return &Postgres{pool: pool, queries: storesqlc.New(pool)}, nil
+	return &Postgres{pool: pool, queries: sqlc.New(pool)}, nil
 }
 
 func (p *Postgres) Close() {
@@ -80,7 +82,7 @@ func (p *Postgres) Create(ctx context.Context, saga domain.Saga) error {
 	defer rollbackTx(ctx, tx)
 
 	qtx := p.queries.WithTx(tx)
-	if createErr := qtx.CreateSaga(ctx, storesqlc.CreateSagaParams{
+	if createErr := qtx.CreateSaga(ctx, sqlc.CreateSagaParams{
 		ID:        saga.ID,
 		Workflow:  saga.Workflow,
 		Status:    string(saga.Status),
@@ -102,7 +104,17 @@ func (p *Postgres) Create(ctx context.Context, saga domain.Saga) error {
 }
 
 func (p *Postgres) Get(ctx context.Context, id string) (domain.Saga, error) {
-	sagaRow, err := p.queries.GetSaga(ctx, id)
+	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return domain.Saga{}, err
+	}
+	defer rollbackTx(ctx, tx)
+
+	qtx := p.queries.WithTx(tx)
+	sagaRow, err := qtx.GetSaga(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.Saga{}, ErrNotFound
@@ -115,31 +127,45 @@ func (p *Postgres) Get(ctx context.Context, id string) (domain.Saga, error) {
 		return domain.Saga{}, mapErr
 	}
 
-	steps, stepsErr := fetchSteps(ctx, p.queries, id)
+	steps, stepsErr := fetchSteps(ctx, qtx, id)
 	if stepsErr != nil {
 		return domain.Saga{}, stepsErr
 	}
 
 	saga.Steps = steps
+	if commitErr := tx.Commit(ctx); commitErr != nil {
+		return domain.Saga{}, commitErr
+	}
+
 	return saga, nil
 }
 
 func (p *Postgres) List(ctx context.Context, status *domain.SagaStatus, limit int, offset int) ([]domain.Saga, error) {
 	if limit < 0 || offset < 0 {
-		return nil, errors.New("invalid pagination")
+		return nil, ErrInvalidPagination
 	}
+
+	tx, err := p.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer rollbackTx(ctx, tx)
+
+	qtx := p.queries.WithTx(tx)
 
 	safeLimit := int32(limit)
 	safeOffset := int32(offset)
 
 	var (
-		sagaRows []storesqlc.Saga
-		err      error
+		sagaRows []sqlc.Saga
 	)
 	if status == nil {
-		sagaRows, err = p.queries.ListSagas(ctx, storesqlc.ListSagasParams{Limit: safeLimit, Offset: safeOffset})
+		sagaRows, err = qtx.ListSagas(ctx, sqlc.ListSagasParams{Limit: safeLimit, Offset: safeOffset})
 	} else {
-		sagaRows, err = p.queries.ListSagasByStatus(ctx, storesqlc.ListSagasByStatusParams{
+		sagaRows, err = qtx.ListSagasByStatus(ctx, sqlc.ListSagasByStatusParams{
 			Status: string(*status),
 			Limit:  safeLimit,
 			Offset: safeOffset,
@@ -156,13 +182,17 @@ func (p *Postgres) List(ctx context.Context, status *domain.SagaStatus, limit in
 			return nil, mapErr
 		}
 
-		steps, stepsErr := fetchSteps(ctx, p.queries, saga.ID)
+		steps, stepsErr := fetchSteps(ctx, qtx, saga.ID)
 		if stepsErr != nil {
 			return nil, stepsErr
 		}
 
 		saga.Steps = steps
 		sagas = append(sagas, saga)
+	}
+
+	if commitErr := tx.Commit(ctx); commitErr != nil {
+		return nil, commitErr
 	}
 
 	return sagas, nil
@@ -209,7 +239,7 @@ func (p *Postgres) Update(ctx context.Context, id string, fn func(*domain.Saga) 
 	}
 
 	saga.UpdatedAt = time.Now().UTC()
-	if updateErr := qtx.UpdateSaga(ctx, storesqlc.UpdateSagaParams{
+	if updateErr := qtx.UpdateSaga(ctx, sqlc.UpdateSagaParams{
 		ID:        saga.ID,
 		Workflow:  saga.Workflow,
 		Status:    string(saga.Status),
@@ -258,10 +288,10 @@ func fetchSteps(ctx context.Context, reader stepReader, sagaID string) ([]domain
 	return mapStepRows(stepRows)
 }
 
-func mapSagaRow(row storesqlc.Saga) (domain.Saga, error) {
-	status, statusErr := parseSagaStatus(row.Status)
+func mapSagaRow(row sqlc.Saga) (domain.Saga, error) {
+	status, statusErr := domain.ParseSagaStatus(row.Status)
 	if statusErr != nil {
-		return domain.Saga{}, statusErr
+		return domain.Saga{}, fmt.Errorf("unsupported saga status %q", row.Status)
 	}
 
 	sagaContext, contextErr := parseContext(row.Context)
@@ -279,58 +309,105 @@ func mapSagaRow(row storesqlc.Saga) (domain.Saga, error) {
 	}, nil
 }
 
-func mapStepRows(rows []storesqlc.GetSagaStepsRow) ([]domain.SagaStep, error) {
-	steps := make([]domain.SagaStep, 0, len(rows))
-	for _, row := range rows {
-		status, statusErr := parseStepStatus(row.Status)
-		if statusErr != nil {
-			return nil, statusErr
+func mapStepRows(rows []sqlc.GetSagaStepsRow) ([]domain.SagaStep, error) {
+	return mapStepRowsWith(rows, func(row sqlc.GetSagaStepsRow) stepRowFields {
+		return stepRowFields{
+			name:       row.Name,
+			grpcTarget: row.GrpcTarget,
+			statusRaw:  row.Status,
+			attempt:    row.Attempt,
+			startedAt:  row.StartedAt,
+			finishedAt: row.FinishedAt,
+			errText:    row.Error,
 		}
-
-		steps = append(steps, domain.SagaStep{
-			Name:       row.Name,
-			Status:     status,
-			Attempt:    uint32(row.Attempt),
-			StartedAt:  toTimePtr(row.StartedAt),
-			FinishedAt: toTimePtr(row.FinishedAt),
-			Error:      toString(row.Error),
-		})
-	}
-
-	return steps, nil
+	})
 }
 
-func mapStepRowsForUpdate(rows []storesqlc.GetSagaStepsForUpdateRow) ([]domain.SagaStep, error) {
-	steps := make([]domain.SagaStep, 0, len(rows))
-	for _, row := range rows {
-		status, statusErr := parseStepStatus(row.Status)
-		if statusErr != nil {
-			return nil, statusErr
+func mapStepRowsForUpdate(rows []sqlc.GetSagaStepsForUpdateRow) ([]domain.SagaStep, error) {
+	return mapStepRowsWith(rows, func(row sqlc.GetSagaStepsForUpdateRow) stepRowFields {
+		return stepRowFields{
+			name:       row.Name,
+			grpcTarget: row.GrpcTarget,
+			statusRaw:  row.Status,
+			attempt:    row.Attempt,
+			startedAt:  row.StartedAt,
+			finishedAt: row.FinishedAt,
+			errText:    row.Error,
+		}
+	})
+}
+
+type stepRowFields struct {
+	name       string
+	grpcTarget string
+	statusRaw  string
+	attempt    int32
+	startedAt  pgtype.Timestamptz
+	finishedAt pgtype.Timestamptz
+	errText    pgtype.Text
+}
+
+func mapStepRowsWith[T any](rows []T, mapFields func(T) stepRowFields) ([]domain.SagaStep, error) {
+	return mapRows(rows, func(row T) (domain.SagaStep, error) {
+		fields := mapFields(row)
+		return mapStepRow(
+			fields.name,
+			fields.grpcTarget,
+			fields.statusRaw,
+			fields.attempt,
+			fields.startedAt,
+			fields.finishedAt,
+			fields.errText,
+		)
+	})
+}
+
+func mapRows[T any](values []T, mapper func(T) (domain.SagaStep, error)) ([]domain.SagaStep, error) {
+	mapped := make([]domain.SagaStep, 0, len(values))
+	for _, value := range values {
+		result, err := mapper(value)
+		if err != nil {
+			return nil, err
 		}
 
-		steps = append(steps, domain.SagaStep{
-			Name:       row.Name,
-			Status:     status,
-			Attempt:    uint32(row.Attempt),
-			StartedAt:  toTimePtr(row.StartedAt),
-			FinishedAt: toTimePtr(row.FinishedAt),
-			Error:      toString(row.Error),
-		})
+		mapped = append(mapped, result)
 	}
 
-	return steps, nil
+	return mapped, nil
+}
+
+func mapStepRow(
+	name string,
+	grpcTarget string,
+	statusRaw string,
+	attempt int32,
+	startedAt pgtype.Timestamptz,
+	finishedAt pgtype.Timestamptz,
+	errText pgtype.Text,
+) (domain.SagaStep, error) {
+	status, statusErr := domain.ParseSagaStepStatus(statusRaw)
+	if statusErr != nil {
+		return domain.SagaStep{}, fmt.Errorf("unsupported saga step status %q", statusRaw)
+	}
+
+	return domain.SagaStep{
+		Name:       name,
+		GRPCTarget: grpcTarget,
+		Status:     status,
+		Attempt:    uint32(attempt),
+		StartedAt:  toTimePtr(startedAt),
+		FinishedAt: toTimePtr(finishedAt),
+		Error:      toString(errText),
+	}, nil
 }
 
 func replaceSteps(ctx context.Context, writer stepWriter, sagaID string, steps []domain.SagaStep) error {
-	if err := writer.DeleteSagaSteps(ctx, sagaID); err != nil {
-		return err
-	}
-
 	for index, step := range steps {
-		if err := writer.InsertSagaStep(ctx, storesqlc.InsertSagaStepParams{
+		if err := writer.UpsertSagaStep(ctx, sqlc.UpsertSagaStepParams{
 			SagaID:     sagaID,
 			StepIndex:  int32(index),
 			Name:       step.Name,
+			GrpcTarget: step.GRPCTarget,
 			Status:     string(step.Status),
 			Attempt:    int32(step.Attempt),
 			StartedAt:  toNullablePGTime(step.StartedAt),
@@ -341,58 +418,25 @@ func replaceSteps(ctx context.Context, writer stepWriter, sagaID string, steps [
 		}
 	}
 
-	return nil
+	return writer.DeleteSagaStepsFromIndex(ctx, sqlc.DeleteSagaStepsFromIndexParams{
+		SagaID:    sagaID,
+		StepIndex: int32(len(steps)),
+	})
 }
 
 func rollbackTx(ctx context.Context, tx pgx.Tx) {
-	_ = tx.Rollback(ctx)
+	if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+		slog.WarnContext(ctx, "rollback failed", "error", err)
+	}
 }
 
 func parseContext(rawContext []byte) (map[string]any, error) {
-	if len(rawContext) == 0 {
-		return map[string]any{}, nil
-	}
-
-	var parsed map[string]any
-	if err := json.Unmarshal(rawContext, &parsed); err != nil {
-		return nil, err
-	}
-
-	if parsed == nil {
-		return map[string]any{}, nil
+	parsed, err := domain.ParseSagaContext(rawContext)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidSagaContext, err)
 	}
 
 	return parsed, nil
-}
-
-func parseSagaStatus(rawStatus string) (domain.SagaStatus, error) {
-	status := domain.SagaStatus(strings.ToUpper(strings.TrimSpace(rawStatus)))
-	switch status {
-	case domain.SagaStatusCreated,
-		domain.SagaStatusRunning,
-		domain.SagaStatusCompleted,
-		domain.SagaStatusCanceling,
-		domain.SagaStatusCompensated,
-		domain.SagaStatusFailed:
-		return status, nil
-	default:
-		return "", fmt.Errorf("unsupported saga status %q", rawStatus)
-	}
-}
-
-func parseStepStatus(rawStatus string) (domain.SagaStepStatus, error) {
-	status := domain.SagaStepStatus(strings.ToUpper(strings.TrimSpace(rawStatus)))
-	switch status {
-	case domain.SagaStepStatusPending,
-		domain.SagaStepStatusRunning,
-		domain.SagaStepStatusCompleted,
-		domain.SagaStepStatusCompensating,
-		domain.SagaStepStatusCompensated,
-		domain.SagaStepStatusFailed:
-		return status, nil
-	default:
-		return "", fmt.Errorf("unsupported saga step status %q", rawStatus)
-	}
 }
 
 func isUniqueViolation(err error) bool {

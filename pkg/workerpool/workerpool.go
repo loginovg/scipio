@@ -3,10 +3,13 @@ package workerpool
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime/debug"
 	"sync"
 )
 
 var ErrPoolClosed = errors.New("worker pool is closed")
+var ErrWorkerPanic = errors.New("worker handler panicked")
 
 type Result[R any] struct {
 	Value R
@@ -21,6 +24,7 @@ type Pool[T any, R any] struct {
 	tasks   chan T
 	results chan Result[R]
 	done    chan struct{}
+	stopped chan struct{}
 
 	closeOnce sync.Once
 	wg        sync.WaitGroup
@@ -35,6 +39,7 @@ func New[T any, R any](workers int, handler func(context.Context, T) (R, error))
 		tasks:   make(chan T, workers),
 		results: make(chan Result[R], workers),
 		done:    make(chan struct{}),
+		stopped: make(chan struct{}),
 	}
 
 	p.wg.Add(workers)
@@ -47,20 +52,47 @@ func New[T any, R any](workers int, handler func(context.Context, T) (R, error))
 
 func (p *Pool[T, R]) worker() {
 	defer p.wg.Done()
-	for task := range p.tasks {
-		v, err := p.handler(p.ctx, task)
-		p.results <- Result[R]{Value: v, Err: err}
+	for {
+		select {
+		case <-p.done:
+			p.drainTasks()
+			return
+		case task := <-p.tasks:
+			p.results <- p.handleTask(task)
+		}
+	}
+
+}
+
+func (p *Pool[T, R]) drainTasks() {
+	for {
+		select {
+		case task := <-p.tasks:
+			p.results <- p.handleTask(task)
+		default:
+			return
+		}
 	}
 }
 
-func (p *Pool[T, R]) Submit(ctx context.Context, task T) (err error) {
-	defer func() {
-		r := recover()
-		if r != nil {
-			err = ErrPoolClosed
-		}
+func (p *Pool[T, R]) handleTask(task T) Result[R] {
+	var value R
+	var err error
+
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = fmt.Errorf("%w: %v\n%s", ErrWorkerPanic, recovered, debug.Stack())
+			}
+		}()
+
+		value, err = p.handler(p.ctx, task)
 	}()
 
+	return Result[R]{Value: value, Err: err}
+}
+
+func (p *Pool[T, R]) Submit(ctx context.Context, task T) error {
 	select {
 	case <-p.done:
 		return ErrPoolClosed
@@ -84,21 +116,20 @@ func (p *Pool[T, R]) Results() <-chan Result[R] {
 func (p *Pool[T, R]) Shutdown(ctx context.Context) error {
 	p.closeOnce.Do(func() {
 		close(p.done)
-		close(p.tasks)
 
-		waited := make(chan struct{})
 		go func() {
 			p.wg.Wait()
 			close(p.results)
 			p.cancel()
-			close(waited)
+			close(p.stopped)
 		}()
 	})
 
 	select {
-	case <-p.done:
+	case <-p.stopped:
 		return nil
 	case <-ctx.Done():
+		p.cancel()
 		return ctx.Err()
 	}
 }

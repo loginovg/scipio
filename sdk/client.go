@@ -15,8 +15,17 @@ type Client struct {
 	sagaClient sagav1.SagaServiceClient
 }
 
+type StartSagaStep struct {
+	Name       string
+	GRPCTarget string
+}
+
 func NewClient(address string) (*Client, error) {
-	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	return newClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+}
+
+func newClient(address string, options ...grpc.DialOption) (*Client, error) {
+	conn, err := grpc.NewClient(address, options...)
 	if err != nil {
 		return nil, err
 	}
@@ -31,7 +40,11 @@ func (c *Client) Close() error {
 	return c.conn.Close()
 }
 
-func (c *Client) StartSaga(ctx context.Context, workflow string, sagaContext map[string]any) (string, error) {
+func (c *Client) StartSaga(ctx context.Context, workflow string, sagaContext map[string]any, steps []StartSagaStep) (string, error) {
+	return c.StartSagaWithIdempotencyKey(ctx, workflow, "", sagaContext, steps)
+}
+
+func (c *Client) StartSagaWithIdempotencyKey(ctx context.Context, workflow string, idempotencyKey string, sagaContext map[string]any, steps []StartSagaStep) (string, error) {
 	if sagaContext == nil {
 		sagaContext = map[string]any{}
 	}
@@ -41,9 +54,19 @@ func (c *Client) StartSaga(ctx context.Context, workflow string, sagaContext map
 		return "", err
 	}
 
+	mappedSteps := make([]*sagav1.StartSagaStep, 0, len(steps))
+	for _, step := range steps {
+		mappedSteps = append(mappedSteps, &sagav1.StartSagaStep{
+			Name:       step.Name,
+			GrpcTarget: step.GRPCTarget,
+		})
+	}
+
 	response, err := c.sagaClient.StartSaga(ctx, &sagav1.StartSagaRequest{
-		Workflow: workflow,
-		Context:  payload,
+		Workflow:       workflow,
+		Context:        payload,
+		Steps:          mappedSteps,
+		IdempotencyKey: idempotencyKey,
 	})
 	if err != nil {
 		return "", err

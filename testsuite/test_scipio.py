@@ -2,6 +2,24 @@ import concurrent.futures
 import uuid
 
 
+def test_should_return_not_found_when_http_get_requested_for_missing_saga(scipio_cluster):
+    session, first_base_url, _, _ = scipio_cluster
+
+    response = session.get(f"{first_base_url}/sagas/{uuid.uuid4().hex}", timeout=3)
+
+    assert response.status_code == 404
+    assert response.json()["error"] == "saga not found"
+
+
+def test_should_return_not_found_when_http_cancel_requested_for_missing_saga(scipio_cluster, cancel_saga):
+    session, first_base_url, _, _ = scipio_cluster
+
+    response = cancel_saga(session, first_base_url, uuid.uuid4().hex)
+
+    assert response.status_code == 404
+    assert response.json()["error"] == "saga not found"
+
+
 def test_should_create_and_complete_saga_when_start_request_is_valid(scipio_cluster, start_saga, wait_for_status):
     # given
     session, first_base_url, _, _ = scipio_cluster
@@ -15,18 +33,34 @@ def test_should_create_and_complete_saga_when_start_request_is_valid(scipio_clus
     assert saga["context"]["user_id"] == 10
 
 
-def test_should_return_compensated_saga_when_cancel_requested(scipio_cluster, start_saga, cancel_saga):
+def test_should_compensate_saga_when_http_cancel_is_requested(
+    scipio_cluster,
+    start_saga,
+    cancel_saga,
+    wait_for_status,
+    wait_for_step_dispatch,
+):
     # given
     session, first_base_url, _, _ = scipio_cluster
     saga_id = start_saga(session, first_base_url, "cancel_flow", {"ref": "abc"})
+    wait_for_status(session, first_base_url, saga_id, "COMPLETED")
 
     # when
     response = cancel_saga(session, first_base_url, saga_id)
+    saga = wait_for_status(session, first_base_url, saga_id, "COMPENSATED")
+    compensation_calls = wait_for_step_dispatch(saga_id, expected_calls=1, operation="compensate")
 
     # then
     assert response.status_code == 202
     body = response.json()
-    assert body["saga"]["status"] == "COMPENSATED"
+    assert body["saga"]["id"] == saga_id
+    assert body["saga"]["status"] in ("CANCELING", "COMPENSATED")
+    assert saga["status"] == "COMPENSATED"
+    assert len(compensation_calls) == 1
+    assert compensation_calls[0]["operation"] == "compensate"
+    assert compensation_calls[0]["workflow"] == "cancel_flow"
+    assert compensation_calls[0]["step_name"] == "cancel_flow"
+    assert compensation_calls[0]["context"] == {"ref": "abc"}
 
 
 def test_should_filter_sagas_when_status_query_is_provided(scipio_cluster, start_saga, wait_for_status, cancel_saga):
@@ -34,10 +68,13 @@ def test_should_filter_sagas_when_status_query_is_provided(scipio_cluster, start
     session, first_base_url, _, _ = scipio_cluster
     first_saga_id = start_saga(session, first_base_url, "filter_flow", {"kind": "first"})
     second_saga_id = start_saga(session, first_base_url, "filter_flow", {"kind": "second"})
+    wait_for_status(session, first_base_url, first_saga_id, "COMPLETED")
+    wait_for_status(session, first_base_url, second_saga_id, "COMPLETED")
 
     # when
-    cancel_saga(session, first_base_url, second_saga_id)
-    wait_for_status(session, first_base_url, first_saga_id, "COMPLETED")
+    cancel_response = cancel_saga(session, first_base_url, second_saga_id)
+    assert cancel_response.status_code == 202
+    wait_for_status(session, first_base_url, second_saga_id, "COMPENSATED")
     response = session.get(f"{first_base_url}/sagas", params={"status": "COMPENSATED"}, timeout=3)
 
     # then
@@ -63,6 +100,64 @@ def test_should_share_saga_state_between_service_instances_when_using_postgres_s
     assert saga["id"] == saga_id
 
 
+def test_should_return_same_saga_id_when_start_requested_with_same_idempotency_key(
+    scipio_cluster,
+    start_saga,
+    wait_for_status,
+):
+    session, first_base_url, second_base_url, _ = scipio_cluster
+    idempotency_key = uuid.uuid4().hex
+    saga_context = {"source": "testsuite", "value": 42}
+
+    first_saga_id = start_saga(
+        session,
+        first_base_url,
+        "idempotency_flow",
+        saga_context,
+        idempotency_key=idempotency_key,
+    )
+    second_saga_id = start_saga(
+        session,
+        second_base_url,
+        "idempotency_flow",
+        saga_context,
+        idempotency_key=idempotency_key,
+    )
+    saga = wait_for_status(session, first_base_url, first_saga_id, "COMPLETED")
+
+    assert first_saga_id == second_saga_id
+    assert saga["id"] == first_saga_id
+    assert saga["workflow"] == "idempotency_flow"
+
+
+def test_should_dispatch_context_to_step_executor_when_saga_is_started_in_cluster(
+    scipio_cluster,
+    start_saga,
+    wait_for_status,
+    wait_for_step_dispatch,
+):
+    # given
+    session, first_base_url, second_base_url, _ = scipio_cluster
+    saga_context = {
+        "user": {"id": 44, "tier": "gold"},
+        "items": [{"sku": "book-1", "qty": 2}],
+        "total": 120.75,
+    }
+
+    # when
+    saga_id = start_saga(session, first_base_url, "dispatch_ctx_flow", saga_context)
+    saga = wait_for_status(session, second_base_url, saga_id, "COMPLETED")
+    calls = wait_for_step_dispatch(saga_id, expected_calls=1)
+
+    # then
+    assert saga["id"] == saga_id
+    assert len(calls) == 1
+    assert calls[0]["saga_id"] == saga_id
+    assert calls[0]["workflow"] == "dispatch_ctx_flow"
+    assert calls[0]["step_name"] == "dispatch_ctx_flow"
+    assert calls[0]["context"] == saga_context
+
+
 def test_should_handle_concurrent_cancellation_from_multiple_instances_when_lock_is_enabled(
     scipio_cluster,
     start_saga,
@@ -72,7 +167,8 @@ def test_should_handle_concurrent_cancellation_from_multiple_instances_when_lock
     # given
     session, first_base_url, second_base_url, _ = scipio_cluster
     saga_id = start_saga(session, first_base_url, "dual_cancel", {"ref": "same-saga"})
-    
+    wait_for_status(session, first_base_url, saga_id, "COMPLETED")
+
     # when
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         futures = [
@@ -83,7 +179,8 @@ def test_should_handle_concurrent_cancellation_from_multiple_instances_when_lock
     saga = wait_for_status(session, first_base_url, saga_id, "COMPENSATED")
 
     # then
-    assert responses == [202, 202]
+    assert all(status in (202, 409) for status in responses)
+    assert responses.count(202) >= 1
     assert saga["status"] == "COMPENSATED"
 
 
@@ -158,10 +255,10 @@ def test_should_recover_stale_running_step_when_worker_drains_postgres_steps(
     )
     db_connection.execute(
         """
-        INSERT INTO saga_steps (saga_id, step_index, name, status, attempt, started_at, finished_at, error, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, NOW() - INTERVAL '2 minute', NULL, NULL, NOW(), NOW() - INTERVAL '2 minute')
+        INSERT INTO saga_steps (saga_id, step_index, name, grpc_target, status, attempt, started_at, finished_at, error, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, NOW() - INTERVAL '2 minute', NULL, NULL, NOW(), NOW() - INTERVAL '2 minute')
         """,
-        (saga_id, 0, "recover_flow", "RUNNING", 1),
+        (saga_id, 0, "recover_flow", "step-executor:50051", "RUNNING", 1),
     )
 
     # when
@@ -177,3 +274,38 @@ def test_should_recover_stale_running_step_when_worker_drains_postgres_steps(
     assert row is not None
     assert row["status"] == "COMPLETED"
     assert row["attempt"] >= 2
+
+
+def test_should_mark_saga_and_step_as_failed_when_step_target_is_unreachable(
+    scipio_cluster,
+    wait_for_status,
+    db_connection,
+):
+    session, first_base_url, _, _ = scipio_cluster
+    response = session.post(
+        f"{first_base_url}/sagas",
+        json={
+            "workflow": "failed_step_flow",
+            "context": {"reason": "unreachable"},
+            "steps": [{"name": "failed_step_flow", "grpc_target": "unknown-step-target:50051"}],
+        },
+        timeout=3,
+    )
+    assert response.status_code == 202
+    saga_id = response.json()["id"]
+
+    saga = wait_for_status(session, first_base_url, saga_id, "FAILED")
+    assert saga["status"] == "FAILED"
+    assert len(saga["steps"]) == 1
+    assert saga["steps"][0]["status"] == "FAILED"
+    assert saga["steps"][0]["error"] is not None
+
+    db_connection.execute(
+        "SELECT status, error FROM saga_steps WHERE saga_id = %s AND step_index = 0",
+        (saga_id,),
+    )
+    row = db_connection.fetchone()
+
+    assert row is not None
+    assert row["status"] == "FAILED"
+    assert row["error"] is not None

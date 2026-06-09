@@ -2,8 +2,9 @@ package service
 
 import (
 	"context"
-	"io"
-	"log/slog"
+	"errors"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,14 +19,21 @@ func TestShouldCompleteSagaWhenRunnerDrainsPendingStep(t *testing.T) {
 	t.Parallel()
 
 	// given
-	queueStore := newMemoryStepQueueStore()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	svc := NewWithLock(queueStore, lock.NewNoop(), time.Second, logger)
+	queueStore := store.NewMemory()
+	dispatcher := &capturingStepDispatcher{}
+	svc, newErr := New(queueStore, lock.NewNoop(), time.Second)
+	require.NoError(t, newErr)
 
-	sagaID, err := svc.StartSaga(context.Background(), "order_flow", []byte(`{"amount": 42}`))
+	sagaID, err := svc.StartSaga(
+		context.Background(),
+		"order_flow",
+		[]byte(`{"amount": 42}`),
+		[]StartSagaStep{{Name: "order_flow", GRPCTarget: "billing:9000"}},
+	)
 	require.NoError(t, err)
 
-	runner := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 2, time.Millisecond, time.Second, logger)
+	runner, newRunnerErr := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 2, time.Millisecond, time.Second, dispatcher)
+	require.NoError(t, newRunnerErr)
 	runnerCtx, cancel := context.WithCancel(context.Background())
 	runnerDone := make(chan struct{})
 	runnerErr := make(chan error, 1)
@@ -60,22 +68,29 @@ func TestShouldRecoverRunningStepWhenRunnerDetectsStaleExecution(t *testing.T) {
 	t.Parallel()
 
 	// given
-	queueStore := newMemoryStepQueueStore()
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	queueStore := store.NewMemory()
 	now := time.Now().UTC()
 	startedAt := now.Add(-time.Minute)
 	createErr := queueStore.Create(context.Background(), domain.Saga{
-		ID:        "saga-stale-step",
-		Workflow:  "recover_flow",
-		Status:    domain.SagaStatusRunning,
-		Context:   map[string]any{},
-		Steps:     []domain.SagaStep{{Name: "recover_flow", Status: domain.SagaStepStatusRunning, Attempt: 1, StartedAt: &startedAt}},
+		ID:       "saga-stale-step",
+		Workflow: "recover_flow",
+		Status:   domain.SagaStatusRunning,
+		Context:  map[string]any{},
+		Steps: []domain.SagaStep{{
+			Name:       "recover_flow",
+			GRPCTarget: "billing:9000",
+			Status:     domain.SagaStepStatusRunning,
+			Attempt:    1,
+			StartedAt:  &startedAt,
+		}},
 		CreatedAt: now,
 		UpdatedAt: now.Add(-time.Minute),
 	})
 	require.NoError(t, createErr)
 
-	runner := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Millisecond, logger)
+	dispatcher := &capturingStepDispatcher{}
+	runner, newRunnerErr := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, 100*time.Millisecond, dispatcher)
+	require.NoError(t, newRunnerErr)
 	runnerCtx, cancel := context.WithCancel(context.Background())
 	runnerDone := make(chan struct{})
 	runnerErr := make(chan error, 1)
@@ -106,12 +121,170 @@ func TestShouldRecoverRunningStepWhenRunnerDetectsStaleExecution(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond)
 }
 
+func TestShouldDispatchSagaContextWhenRunnerExecutesConfiguredStep(t *testing.T) {
+	t.Parallel()
+
+	queueStore := store.NewMemory()
+	dispatcher := &capturingStepDispatcher{}
+	svc, newErr := New(queueStore, lock.NewNoop(), time.Second)
+	require.NoError(t, newErr)
+
+	sagaID, err := svc.StartSaga(
+		context.Background(),
+		"order_flow",
+		[]byte(`{"amount": 42, "currency": "USD"}`),
+		[]StartSagaStep{{Name: "charge", GRPCTarget: "billing:9000"}},
+	)
+	require.NoError(t, err)
+
+	runner, newRunnerErr := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, dispatcher)
+	require.NoError(t, newRunnerErr)
+	runnerCtx, cancel := context.WithCancel(context.Background())
+	runnerDone := make(chan struct{})
+	runnerErr := make(chan error, 1)
+	go func() {
+		defer close(runnerDone)
+		runnerErr <- runner.Run(runnerCtx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-runnerDone
+		require.NoError(t, <-runnerErr)
+	})
+
+	require.Eventually(t, func() bool {
+		saga, getErr := svc.GetSaga(context.Background(), sagaID)
+		if getErr != nil {
+			return false
+		}
+		if saga.Status != domain.SagaStatusCompleted {
+			return false
+		}
+
+		calls := dispatcher.callsSnapshot()
+		if len(calls) != 1 {
+			return false
+		}
+
+		call := calls[0]
+		amount, ok := call.Saga.Context["amount"].(float64)
+		if !ok || amount != 42 {
+			return false
+		}
+
+		currency, ok := call.Saga.Context["currency"].(string)
+		if !ok || currency != "USD" {
+			return false
+		}
+
+		return call.Saga.ID == sagaID && call.Step.Name == "charge" && call.Step.GRPCTarget == "billing:9000"
+	}, 2*time.Second, 20*time.Millisecond)
+}
+
+func TestShouldFailSagaWhenStepDispatchReturnsError(t *testing.T) {
+	t.Parallel()
+
+	queueStore := store.NewMemory()
+	dispatcher := &capturingStepDispatcher{err: errors.New("participant unavailable")}
+	svc, newErr := New(queueStore, lock.NewNoop(), time.Second)
+	require.NoError(t, newErr)
+
+	sagaID, err := svc.StartSaga(
+		context.Background(),
+		"order_flow",
+		[]byte(`{"amount": 42}`),
+		[]StartSagaStep{{Name: "charge", GRPCTarget: "billing:9000"}},
+	)
+	require.NoError(t, err)
+
+	runner, newRunnerErr := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, dispatcher)
+	require.NoError(t, newRunnerErr)
+	runnerCtx, cancel := context.WithCancel(context.Background())
+	runnerDone := make(chan struct{})
+	runnerErr := make(chan error, 1)
+	go func() {
+		defer close(runnerDone)
+		runnerErr <- runner.Run(runnerCtx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-runnerDone
+		require.NoError(t, <-runnerErr)
+	})
+
+	require.Eventually(t, func() bool {
+		saga, getErr := svc.GetSaga(context.Background(), sagaID)
+		if getErr != nil {
+			return false
+		}
+		if saga.Status != domain.SagaStatusFailed || len(saga.Steps) != 1 {
+			return false
+		}
+
+		step := saga.Steps[0]
+		if step.Status != domain.SagaStepStatusFailed {
+			return false
+		}
+
+		return strings.Contains(step.Error, "participant unavailable")
+	}, 2*time.Second, 20*time.Millisecond)
+}
+
+func TestShouldTransitionSagaToFailedWhenCompletingStepAndAnotherStepIsFailed(t *testing.T) {
+	t.Parallel()
+
+	queueStore := store.NewMemory()
+	now := time.Now().UTC()
+	createErr := queueStore.Create(context.Background(), domain.Saga{
+		ID:       "saga-with-failed-step",
+		Workflow: "order_flow",
+		Status:   domain.SagaStatusRunning,
+		Context:  map[string]any{},
+		Steps: []domain.SagaStep{
+			{
+				Name:       "step-0",
+				GRPCTarget: "billing:9000",
+				Status:     domain.SagaStepStatusFailed,
+				Attempt:    1,
+				Error:      "previous failure",
+			},
+			{
+				Name:       "step-1",
+				GRPCTarget: "billing:9000",
+				Status:     domain.SagaStepStatusPending,
+			},
+		},
+		CreatedAt: now.Add(-time.Minute),
+		UpdatedAt: now.Add(-time.Minute),
+	})
+	require.NoError(t, createErr)
+
+	dispatcher := &capturingStepDispatcher{}
+	runner, newRunnerErr := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, dispatcher)
+	require.NoError(t, newRunnerErr)
+
+	processErr := runner.processClaimedStep(context.Background(), domain.ClaimedSagaStep{
+		SagaID:    "saga-with-failed-step",
+		StepIndex: 1,
+		Name:      "step-1",
+		Attempt:   1,
+	})
+	require.NoError(t, processErr)
+
+	saga, getErr := queueStore.Get(context.Background(), "saga-with-failed-step")
+	require.NoError(t, getErr)
+	require.Equal(t, domain.SagaStatusFailed, saga.Status)
+	require.Len(t, saga.Steps, 2)
+	require.Equal(t, domain.SagaStepStatusFailed, saga.Steps[0].Status)
+	require.Equal(t, domain.SagaStepStatusCompleted, saga.Steps[1].Status)
+}
+
 func TestShouldReturnErrStoreNotConfiguredWhenStepRunnerStoreIsNil(t *testing.T) {
 	t.Parallel()
 
 	// given
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	runner := NewStepRunner(nil, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, logger)
+	runner, newRunnerErr := NewStepRunner(nil, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, nil)
+	require.NoError(t, newRunnerErr)
 
 	// when
 	err := runner.Run(context.Background())
@@ -120,83 +293,187 @@ func TestShouldReturnErrStoreNotConfiguredWhenStepRunnerStoreIsNil(t *testing.T)
 	require.ErrorIs(t, err, ErrStoreNotConfigured)
 }
 
-type memoryStepQueueStore struct {
-	inner *store.Memory
+func TestShouldCompensateSagaWhenRunnerProcessesCancelingSaga(t *testing.T) {
+	t.Parallel()
+
+	queueStore := store.NewMemory()
+	now := time.Now().UTC()
+	createErr := queueStore.Create(context.Background(), domain.Saga{
+		ID:       "saga-canceling-step",
+		Workflow: "cancel_flow",
+		Status:   domain.SagaStatusCanceling,
+		Context:  map[string]any{},
+		Steps: []domain.SagaStep{{
+			Name:       "cancel_flow",
+			GRPCTarget: "billing:9000",
+			Status:     domain.SagaStepStatusCompleted,
+			Attempt:    1,
+			StartedAt:  &now,
+		}},
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	require.NoError(t, createErr)
+
+	dispatcher := &capturingStepDispatcher{}
+	runner, newRunnerErr := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, dispatcher)
+	require.NoError(t, newRunnerErr)
+
+	err := runner.processClaimedStep(context.Background(), domain.ClaimedSagaStep{
+		SagaID:    "saga-canceling-step",
+		StepIndex: 0,
+		Name:      "cancel_flow",
+		Attempt:   1,
+	})
+	require.NoError(t, err)
+
+	saga, getErr := queueStore.Get(context.Background(), "saga-canceling-step")
+	require.NoError(t, getErr)
+	require.Equal(t, domain.SagaStatusCompensated, saga.Status)
+	require.Len(t, saga.Steps, 1)
+	require.Equal(t, domain.SagaStepStatusCompensated, saga.Steps[0].Status)
+	require.NotNil(t, saga.Steps[0].FinishedAt)
+
+	calls := dispatcher.callsSnapshot()
+	require.Len(t, calls, 1)
+	require.Equal(t, domain.SagaStepStatusCompensating, calls[0].Step.Status)
 }
 
-func newMemoryStepQueueStore() *memoryStepQueueStore {
-	return &memoryStepQueueStore{inner: store.NewMemory()}
+func TestShouldFailSagaWhenCompensationDispatchReturnsError(t *testing.T) {
+	t.Parallel()
+
+	queueStore := store.NewMemory()
+	now := time.Now().UTC()
+	createErr := queueStore.Create(context.Background(), domain.Saga{
+		ID:       "saga-failed-compensation",
+		Workflow: "cancel_flow",
+		Status:   domain.SagaStatusCanceling,
+		Context:  map[string]any{},
+		Steps: []domain.SagaStep{{
+			Name:       "cancel_flow",
+			GRPCTarget: "billing:9000",
+			Status:     domain.SagaStepStatusCompleted,
+			Attempt:    1,
+			StartedAt:  &now,
+		}},
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	require.NoError(t, createErr)
+
+	dispatcher := &capturingStepDispatcher{err: errors.New("compensation failed")}
+	runner, newRunnerErr := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, dispatcher)
+	require.NoError(t, newRunnerErr)
+
+	err := runner.processClaimedStep(context.Background(), domain.ClaimedSagaStep{
+		SagaID:    "saga-failed-compensation",
+		StepIndex: 0,
+		Name:      "cancel_flow",
+		Attempt:   1,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "compensation failed")
+
+	saga, getErr := queueStore.Get(context.Background(), "saga-failed-compensation")
+	require.NoError(t, getErr)
+	require.Equal(t, domain.SagaStatusFailed, saga.Status)
+	require.Len(t, saga.Steps, 1)
+	require.Equal(t, domain.SagaStepStatusFailed, saga.Steps[0].Status)
+	require.Contains(t, saga.Steps[0].Error, "compensation failed")
 }
 
-func (m *memoryStepQueueStore) Create(ctx context.Context, saga domain.Saga) error {
-	return m.inner.Create(ctx, saga)
+func TestShouldReturnErrClaimedStepIndexOutOfBoundsWhenClaimedStepIndexIsOutsideSagaSteps(t *testing.T) {
+	t.Parallel()
+
+	queueStore := store.NewMemory()
+	now := time.Now().UTC()
+	createErr := queueStore.Create(context.Background(), domain.Saga{
+		ID:       "saga-out-of-bounds-step",
+		Workflow: "order_flow",
+		Status:   domain.SagaStatusCreated,
+		Context:  map[string]any{},
+		Steps: []domain.SagaStep{{
+			Name:       "order_flow",
+			GRPCTarget: "billing:9000",
+			Status:     domain.SagaStepStatusPending,
+		}},
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	require.NoError(t, createErr)
+
+	runner, newRunnerErr := NewStepRunner(queueStore, lock.NewNoop(), time.Second, 1, time.Millisecond, time.Second, nil)
+	require.NoError(t, newRunnerErr)
+
+	err := runner.processClaimedStep(context.Background(), domain.ClaimedSagaStep{
+		SagaID:    "saga-out-of-bounds-step",
+		StepIndex: 5,
+		Name:      "order_flow",
+		Attempt:   1,
+	})
+	require.ErrorIs(t, err, ErrClaimedStepIndexOutOfBounds)
 }
 
-func (m *memoryStepQueueStore) Get(ctx context.Context, id string) (domain.Saga, error) {
-	return m.inner.Get(ctx, id)
+func TestShouldReturnErrInvalidTTLWhenLockTTLIsNotPositiveInStepRunnerConstructor(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewStepRunner(store.NewMemory(), lock.NewNoop(), 0, 1, time.Millisecond, time.Second, nil)
+
+	require.ErrorIs(t, err, lock.ErrInvalidTTL)
 }
 
-func (m *memoryStepQueueStore) List(ctx context.Context, status *domain.SagaStatus, limit int, offset int) ([]domain.Saga, error) {
-	return m.inner.List(ctx, status, limit, offset)
+func TestShouldReturnErrInvalidStepWorkersWhenStepRunnerWorkersAreNotPositive(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewStepRunner(store.NewMemory(), lock.NewNoop(), time.Second, 0, time.Millisecond, time.Second, nil)
+
+	require.ErrorIs(t, err, ErrInvalidStepWorkers)
 }
 
-func (m *memoryStepQueueStore) Update(ctx context.Context, id string, fn func(*domain.Saga) error) (domain.Saga, error) {
-	return m.inner.Update(ctx, id, fn)
+func TestShouldReturnErrInvalidStepPollIntervalWhenStepRunnerPollIntervalIsNotPositive(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewStepRunner(store.NewMemory(), lock.NewNoop(), time.Second, 1, 0, time.Second, nil)
+
+	require.ErrorIs(t, err, ErrInvalidStepPollInterval)
 }
 
-func (m *memoryStepQueueStore) ClaimNextStep(ctx context.Context, staleAfter time.Duration) (domain.ClaimedSagaStep, bool, error) {
-	sagas, err := m.inner.List(ctx, nil, 1000, 0)
-	if err != nil {
-		return domain.ClaimedSagaStep{}, false, err
-	}
+func TestShouldReturnErrInvalidStepStaleTimeoutWhenStepRunnerStaleTimeoutIsNotPositive(t *testing.T) {
+	t.Parallel()
 
-	for _, saga := range sagas {
-		if saga.Status != domain.SagaStatusCreated && saga.Status != domain.SagaStatusRunning {
-			continue
-		}
+	_, err := NewStepRunner(store.NewMemory(), lock.NewNoop(), time.Second, 1, time.Millisecond, 0, nil)
 
-		for index, step := range saga.Steps {
-			isPending := step.Status == domain.SagaStepStatusPending
-			isRunningAndStale := step.Status == domain.SagaStepStatusRunning &&
-				staleAfter > 0 &&
-				step.StartedAt != nil &&
-				time.Since(step.StartedAt.UTC()) >= staleAfter
-			if !isPending && !isRunningAndStale {
-				continue
-			}
+	require.ErrorIs(t, err, ErrInvalidStepStaleTimeout)
+}
 
-			claimed := domain.ClaimedSagaStep{
-				SagaID:    saga.ID,
-				StepIndex: index,
-				Name:      step.Name,
-				Attempt:   step.Attempt + 1,
-			}
+type dispatchCall struct {
+	Saga domain.Saga
+	Step domain.SagaStep
+}
 
-			_, updateErr := m.inner.Update(ctx, saga.ID, func(candidate *domain.Saga) error {
-				if index < 0 || index >= len(candidate.Steps) {
-					return nil
-				}
+type capturingStepDispatcher struct {
+	mu    sync.Mutex
+	calls []dispatchCall
+	err   error
+}
 
-				candidateStep := &candidate.Steps[index]
-				if candidateStep.Status != domain.SagaStepStatusPending && candidateStep.Status != domain.SagaStepStatusRunning {
-					return nil
-				}
+func (d *capturingStepDispatcher) Dispatch(_ context.Context, saga domain.Saga, step domain.SagaStep) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 
-				now := time.Now().UTC()
-				candidateStep.Status = domain.SagaStepStatusRunning
-				candidateStep.Attempt++
-				candidateStep.StartedAt = &now
-				candidateStep.FinishedAt = nil
-				candidateStep.Error = ""
-				return nil
-			})
-			if updateErr != nil {
-				return domain.ClaimedSagaStep{}, false, updateErr
-			}
+	d.calls = append(d.calls, dispatchCall{
+		Saga: saga,
+		Step: step,
+	})
 
-			return claimed, true, nil
-		}
-	}
+	return d.err
+}
 
-	return domain.ClaimedSagaStep{}, false, nil
+func (d *capturingStepDispatcher) callsSnapshot() []dispatchCall {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	copied := make([]dispatchCall, len(d.calls))
+	copy(copied, d.calls)
+	return copied
 }

@@ -10,13 +10,12 @@ import (
 	"scipio/gen/openapi"
 	"scipio/internal/domain"
 	"scipio/internal/service"
-	"scipio/internal/store"
 
 	middleware "github.com/oapi-codegen/nethttp-middleware"
 )
 
 type sagaService interface {
-	StartSaga(ctx context.Context, workflow string, rawContext []byte) (string, error)
+	StartSagaWithIdempotencyKey(ctx context.Context, workflow string, idempotencyKey string, rawContext []byte, steps []service.StartSagaStep) (string, error)
 	GetSaga(ctx context.Context, sagaID string) (domain.Saga, error)
 	CancelSaga(ctx context.Context, sagaID string) (domain.Saga, error)
 	ListSagas(ctx context.Context, status string, limit int, offset int) ([]domain.Saga, error)
@@ -63,13 +62,22 @@ func (s *Server) StartSaga(ctx context.Context, request openapi.StartSagaRequest
 		return openapi.StartSaga400JSONResponse{Error: "context must be valid JSON"}, nil
 	}
 
-	sagaID, startErr := s.svc.StartSaga(ctx, request.Body.Workflow, payload)
+	idempotencyKey := ""
+	if request.Body.IdempotencyKey != nil {
+		idempotencyKey = *request.Body.IdempotencyKey
+	}
+
+	sagaID, startErr := s.svc.StartSagaWithIdempotencyKey(ctx, request.Body.Workflow, idempotencyKey, payload, mapStartSagaSteps(request.Body.Steps))
 	if startErr != nil {
 		switch {
-		case errors.Is(startErr, service.ErrInvalidWorkflow), errors.Is(startErr, service.ErrInvalidContext):
+		case errors.Is(startErr, service.ErrInvalidWorkflow),
+			errors.Is(startErr, service.ErrInvalidContext),
+			errors.Is(startErr, service.ErrStepsRequired),
+			errors.Is(startErr, service.ErrInvalidStepName),
+			errors.Is(startErr, service.ErrInvalidStepGRPCTarget):
 			return openapi.StartSaga400JSONResponse{Error: startErr.Error()}, nil
 		default:
-			return openapi.StartSaga500JSONResponse{Error: "internal error"}, nil
+			return openapi.StartSaga500JSONResponse{Error: startErr.Error()}, nil
 		}
 	}
 
@@ -98,7 +106,7 @@ func (s *Server) ListSagas(ctx context.Context, request openapi.ListSagasRequest
 		case errors.Is(err, service.ErrInvalidStatusFilter), errors.Is(err, service.ErrInvalidPagination):
 			return openapi.ListSagas400JSONResponse{Error: err.Error()}, nil
 		default:
-			return openapi.ListSagas500JSONResponse{Error: "internal error"}, nil
+			return openapi.ListSagas500JSONResponse{Error: err.Error()}, nil
 		}
 	}
 
@@ -114,10 +122,10 @@ func (s *Server) GetSaga(ctx context.Context, request openapi.GetSagaRequestObje
 	saga, err := s.svc.GetSaga(ctx, request.Id)
 	if err != nil {
 		switch {
-		case errors.Is(err, store.ErrNotFound):
+		case errors.Is(err, service.ErrSagaNotFound):
 			return openapi.GetSaga404JSONResponse{Error: err.Error()}, nil
 		default:
-			return openapi.GetSaga500JSONResponse{Error: "internal error"}, nil
+			return openapi.GetSaga500JSONResponse{Error: err.Error()}, nil
 		}
 	}
 
@@ -128,10 +136,12 @@ func (s *Server) CancelSaga(ctx context.Context, request openapi.CancelSagaReque
 	saga, err := s.svc.CancelSaga(ctx, request.Id)
 	if err != nil {
 		switch {
-		case errors.Is(err, store.ErrNotFound):
+		case errors.Is(err, service.ErrSagaNotFound):
 			return openapi.CancelSaga404JSONResponse{Error: err.Error()}, nil
+		case errors.Is(err, service.ErrSagaLockContended), errors.Is(err, service.ErrSagaCancelNotAllowed):
+			return openapi.CancelSaga409JSONResponse{Error: err.Error()}, nil
 		default:
-			return openapi.CancelSaga500JSONResponse{Error: "internal error"}, nil
+			return openapi.CancelSaga500JSONResponse{Error: err.Error()}, nil
 		}
 	}
 
@@ -139,10 +149,7 @@ func (s *Server) CancelSaga(ctx context.Context, request openapi.CancelSagaReque
 }
 
 func mapSaga(saga domain.Saga) openapi.Saga {
-	mappedSteps := make([]openapi.SagaStep, 0, len(saga.Steps))
-	for _, step := range saga.Steps {
-		mappedSteps = append(mappedSteps, mapStep(step))
-	}
+	mappedSteps := domain.MapSagaSteps(saga.Steps, mapStep)
 
 	createdAt := saga.CreatedAt.UTC()
 	updatedAt := saga.UpdatedAt.UTC()
@@ -166,7 +173,17 @@ func mapStep(step domain.SagaStep) openapi.SagaStep {
 		StartedAt:  copyTime(step.StartedAt),
 		FinishedAt: copyTime(step.FinishedAt),
 		Error:      copyString(step.Error),
+		GrpcTarget: copyString(step.GRPCTarget),
 	}
+}
+
+func mapStartSagaSteps(steps []openapi.StartSagaStep) []service.StartSagaStep {
+	return service.MapStartSagaSteps(steps, func(step openapi.StartSagaStep) service.StartSagaStep {
+		return service.StartSagaStep{
+			Name:       step.Name,
+			GRPCTarget: step.GrpcTarget,
+		}
+	})
 }
 
 func copyTime(ts *time.Time) *time.Time {

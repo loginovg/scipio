@@ -10,9 +10,16 @@ service SagaService {
   rpc CancelSaga(CancelSagaRequest) returns (CancelSagaResponse);
 }
 
+service SagaStepExecutor {
+  rpc ExecuteStep(ExecuteStepRequest) returns (ExecuteStepResponse);
+  rpc CompensateStep(CompensateStepRequest) returns (CompensateStepResponse);
+}
+
 message StartSagaRequest {
   string workflow = 1;
   bytes context = 2;
+  repeated StartSagaStep steps = 3;
+  string idempotency_key = 4;
 }
 
 message StartSagaResponse {
@@ -52,6 +59,34 @@ message SagaStep {
   string started_at = 4;
   string finished_at = 5;
   string error = 6;
+  string grpc_target = 7;
+}
+
+message StartSagaStep {
+  string name = 1;
+  string grpc_target = 2;
+}
+
+message ExecuteStepRequest {
+  string saga_id = 1;
+  string workflow = 2;
+  string step_name = 3;
+  uint32 attempt = 4;
+  bytes context = 5;
+}
+
+message ExecuteStepResponse {
+}
+
+message CompensateStepRequest {
+  string saga_id = 1;
+  string workflow = 2;
+  string step_name = 3;
+  uint32 attempt = 4;
+  bytes context = 5;
+}
+
+message CompensateStepResponse {
 }
 
 enum SagaStatus {

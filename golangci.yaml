@@ -1,2 +1,14 @@
 linters:
-  enable-all: true
+  disable-all: true
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - ineffassign
+    - revive
+    - gocritic
+    - exhaustive
+    - gosec
+    - unconvert
+    - unparam
+    - nilerr

@@ -1,9 +1,23 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
+)
+
+const (
+	defaultGRPCPort                 = 9090
+	defaultHTTPPort                 = 8080
+	defaultStepWorkers              = 8
+	defaultStepPollInterval         = 25 * time.Millisecond
+	defaultStepStaleTimeout         = 5 * time.Second
+	defaultLockTTL                  = 5 * time.Second
+	defaultLockRetryInterval        = 25 * time.Millisecond
+	defaultPostgresConnectionString = "postgresql://scipio:scipio@127.0.0.1:5432/scipio?sslmode=disable"
+	defaultRedisConnectionString    = "redis://127.0.0.1:6380/0"
 )
 
 type Runtime struct {
@@ -16,57 +30,81 @@ type Runtime struct {
 	LockRetryInterval        time.Duration
 	PostgresConnectionString string
 	RedisConnectionString    string
-	MigrationsPath           string
 }
 
-func Load() Runtime {
+func Load() (Runtime, error) {
+	grpcPort, err := envVar("SCIPIO_GRPC_PORT", strconv.Atoi, defaultGRPCPort)
+	if err != nil {
+		return Runtime{}, err
+	}
+
+	httpPort, err := envVar("SCIPIO_HTTP_PORT", strconv.Atoi, defaultHTTPPort)
+	if err != nil {
+		return Runtime{}, err
+	}
+
+	stepWorkers, err := envVar("SCIPIO_STEP_WORKERS", strconv.Atoi, defaultStepWorkers)
+	if err != nil {
+		return Runtime{}, err
+	}
+
+	stepPollInterval, err := envVar("SCIPIO_STEP_POLL_INTERVAL", time.ParseDuration, defaultStepPollInterval)
+	if err != nil {
+		return Runtime{}, err
+	}
+
+	stepStaleTimeout, err := envVar("SCIPIO_STEP_STALE_TIMEOUT", time.ParseDuration, defaultStepStaleTimeout)
+	if err != nil {
+		return Runtime{}, err
+	}
+
+	lockTTL, err := envVar("SCIPIO_LOCK_TTL", time.ParseDuration, defaultLockTTL)
+	if err != nil {
+		return Runtime{}, err
+	}
+
+	lockRetryInterval, err := envVar("SCIPIO_LOCK_RETRY_INTERVAL", time.ParseDuration, defaultLockRetryInterval)
+	if err != nil {
+		return Runtime{}, err
+	}
+
+	postgresConnectionString, err := envVar("PG_CONN", asString, defaultPostgresConnectionString)
+	if err != nil {
+		return Runtime{}, err
+	}
+
+	redisConnectionString, err := envVar("REDIS_CONN", asString, defaultRedisConnectionString)
+	if err != nil {
+		return Runtime{}, err
+	}
+
 	return Runtime{
-		GRPCPort:                 envInt("SCIPIO_GRPC_PORT", 9090),
-		HTTPPort:                 envInt("SCIPIO_HTTP_PORT", 8080),
-		StepWorkers:              envInt("SCIPIO_STEP_WORKERS", 8),
-		StepPollInterval:         envDuration("SCIPIO_STEP_POLL_INTERVAL", 25*time.Millisecond),
-		StepStaleTimeout:         envDuration("SCIPIO_STEP_STALE_TIMEOUT", 5*time.Second),
-		LockTTL:                  envDuration("SCIPIO_LOCK_TTL", 5*time.Second),
-		LockRetryInterval:        envDuration("SCIPIO_LOCK_RETRY_INTERVAL", 25*time.Millisecond),
-		PostgresConnectionString: envString("PG_CONN", "postgresql://scipio:scipio@127.0.0.1:5432/scipio?sslmode=disable"),
-		RedisConnectionString:    envString("REDIS_CONN", "redis://127.0.0.1:6380/0"),
-		MigrationsPath:           envString("SCIPIO_MIGRATIONS_PATH", "migrations"),
-	}
+		GRPCPort:                 grpcPort,
+		HTTPPort:                 httpPort,
+		StepWorkers:              stepWorkers,
+		StepPollInterval:         stepPollInterval,
+		StepStaleTimeout:         stepStaleTimeout,
+		LockTTL:                  lockTTL,
+		LockRetryInterval:        lockRetryInterval,
+		PostgresConnectionString: postgresConnectionString,
+		RedisConnectionString:    redisConnectionString,
+	}, nil
 }
 
-func envInt(name string, fallback int) int {
+func envVar[T any](name string, parse func(string) (T, error), fallback T) (T, error) {
 	raw := os.Getenv(name)
-	if raw == "" {
-		return fallback
+	if strings.TrimSpace(raw) == "" {
+		return fallback, nil
 	}
 
-	parsed, err := strconv.Atoi(raw)
+	parsed, err := parse(raw)
 	if err != nil {
-		return fallback
+		return fallback, fmt.Errorf("env %s: invalid value %q: %w", name, raw, err)
 	}
 
-	return parsed
+	return parsed, nil
 }
 
-func envDuration(name string, fallback time.Duration) time.Duration {
-	raw := os.Getenv(name)
-	if raw == "" {
-		return fallback
-	}
-
-	parsed, err := time.ParseDuration(raw)
-	if err != nil {
-		return fallback
-	}
-
-	return parsed
-}
-
-func envString(name string, fallback string) string {
-	raw := os.Getenv(name)
-	if raw == "" {
-		return fallback
-	}
-
-	return raw
+func asString(raw string) (string, error) {
+	return raw, nil
 }

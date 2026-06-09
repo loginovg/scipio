@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -17,14 +18,32 @@ type stepQueueStore interface {
 	ClaimNextStep(ctx context.Context, staleAfter time.Duration) (domain.ClaimedSagaStep, bool, error)
 }
 
+var ErrInvalidStepWorkers = errors.New("step workers must be positive")
+var ErrInvalidStepPollInterval = errors.New("step poll interval must be positive")
+var ErrInvalidStepStaleTimeout = errors.New("step stale timeout must be positive")
+var ErrClaimedStepIndexOutOfBounds = errors.New("claimed step index is out of bounds")
+
 type StepRunner struct {
 	store        stepQueueStore
 	pollInterval time.Duration
 	staleAfter   time.Duration
-	logger       *slog.Logger
+	dispatcher   stepDispatcher
 	sagaLocker   sagaLocker
-	pool         *workerpool.Pool[domain.ClaimedSagaStep, struct{}]
+	pool         *workerpool.Pool[domain.ClaimedSagaStep, stepExecutionResult]
 }
+
+type stepExecutionResult struct {
+	SagaID    string
+	StepIndex int
+}
+
+type stepDispatchMode int
+
+const (
+	stepDispatchModeNone stepDispatchMode = iota
+	stepDispatchModeExecute
+	stepDispatchModeCompensate
+)
 
 func NewStepRunner(
 	store stepQueueStore,
@@ -33,25 +52,41 @@ func NewStepRunner(
 	workers int,
 	pollInterval time.Duration,
 	staleAfter time.Duration,
-	logger *slog.Logger,
-) *StepRunner {
-	if logger == nil {
-		logger = slog.Default()
+	dispatcher stepDispatcher,
+) (*StepRunner, error) {
+	if lockTTL <= 0 {
+		return nil, lock.ErrInvalidTTL
+	}
+	if workers <= 0 {
+		return nil, ErrInvalidStepWorkers
+	}
+	if pollInterval <= 0 {
+		return nil, ErrInvalidStepPollInterval
+	}
+	if staleAfter <= 0 {
+		return nil, ErrInvalidStepStaleTimeout
+	}
+
+	if dispatcher == nil {
+		dispatcher = newGRPCStepDispatcher()
 	}
 
 	runner := &StepRunner{
 		store:        store,
-		pollInterval: normalizePollInterval(pollInterval),
-		staleAfter:   normalizeStaleAfter(staleAfter),
-		logger:       logger,
-		sagaLocker:   newSagaLocker(locker, lockTTL, logger),
+		pollInterval: pollInterval,
+		staleAfter:   staleAfter,
+		dispatcher:   dispatcher,
+		sagaLocker:   newSagaLocker(locker, lockTTL),
 	}
 
-	runner.pool = workerpool.New[domain.ClaimedSagaStep, struct{}](normalizeWorkers(workers), func(ctx context.Context, step domain.ClaimedSagaStep) (struct{}, error) {
-		return struct{}{}, runner.processClaimedStep(ctx, step)
+	runner.pool = workerpool.New[domain.ClaimedSagaStep, stepExecutionResult](workers, func(ctx context.Context, step domain.ClaimedSagaStep) (stepExecutionResult, error) {
+		return stepExecutionResult{
+			SagaID:    step.SagaID,
+			StepIndex: step.StepIndex,
+		}, runner.processClaimedStep(ctx, step)
 	})
 
-	return runner
+	return runner, nil
 }
 
 func (r *StepRunner) Run(ctx context.Context) error {
@@ -64,7 +99,7 @@ func (r *StepRunner) Run(ctx context.Context) error {
 		defer close(resultsDone)
 		for res := range r.pool.Results() {
 			if res.Err != nil {
-				r.logger.WarnContext(ctx, "step execution failed", "error", res.Err)
+				slog.WarnContext(ctx, "step execution failed", "saga_id", res.Value.SagaID, "step_index", res.Value.StepIndex, "error", res.Err)
 			}
 		}
 	}()
@@ -72,7 +107,9 @@ func (r *StepRunner) Run(ctx context.Context) error {
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		_ = r.pool.Shutdown(shutdownCtx)
+		if shutdownErr := r.pool.Shutdown(shutdownCtx); shutdownErr != nil {
+			slog.WarnContext(ctx, "failed to shutdown step runner pool", "error", shutdownErr)
+		}
 		<-resultsDone
 	}()
 
@@ -80,32 +117,26 @@ func (r *StepRunner) Run(ctx context.Context) error {
 	defer ticker.Stop()
 
 	for {
-		select {
-		case <-ctx.Done():
+		if !isContextAlive(ctx) {
 			return nil
-		default:
 		}
 
 		claimed, found, err := r.store.ClaimNextStep(ctx, r.staleAfter)
 		if err != nil {
-			if ctx.Err() != nil {
+			if !isContextAlive(ctx) {
 				return nil
 			}
 
-			r.logger.WarnContext(ctx, "failed to claim saga step", "error", err)
-			select {
-			case <-ctx.Done():
+			slog.WarnContext(ctx, "failed to claim saga step", "error", err)
+			if !waitTick(ctx, ticker) {
 				return nil
-			case <-ticker.C:
 			}
 			continue
 		}
 
 		if !found {
-			select {
-			case <-ctx.Done():
+			if !waitTick(ctx, ticker) {
 				return nil
-			case <-ticker.C:
 			}
 			continue
 		}
@@ -115,86 +146,196 @@ func (r *StepRunner) Run(ctx context.Context) error {
 				return nil
 			}
 
-			r.logger.WarnContext(ctx, "failed to submit claimed saga step", "saga_id", claimed.SagaID, "step_index", claimed.StepIndex, "error", submitErr)
-			select {
-			case <-ctx.Done():
+			slog.WarnContext(ctx, "failed to submit claimed saga step", "saga_id", claimed.SagaID, "step_index", claimed.StepIndex, "error", submitErr)
+			if !waitTick(ctx, ticker) {
 				return nil
-			case <-ticker.C:
 			}
 		}
 	}
 }
 
+func waitTick(ctx context.Context, ticker *time.Ticker) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-ticker.C:
+		return true
+	}
+}
+
+func isContextAlive(ctx context.Context) bool {
+	return ctx.Err() == nil
+}
+
 func (r *StepRunner) processClaimedStep(ctx context.Context, claimed domain.ClaimedSagaStep) error {
 	return r.sagaLocker.withSagaLock(ctx, claimed.SagaID, func(lockCtx context.Context) error {
-		_, err := r.store.Update(lockCtx, claimed.SagaID, func(candidate *domain.Saga) error {
-			if claimed.StepIndex < 0 || claimed.StepIndex >= len(candidate.Steps) {
-				return nil
-			}
-
-			step := &candidate.Steps[claimed.StepIndex]
-			now := time.Now().UTC()
-			switch candidate.Status {
-			case domain.SagaStatusCanceling, domain.SagaStatusCompensated, domain.SagaStatusFailed:
-				if step.Status == domain.SagaStepStatusPending || step.Status == domain.SagaStepStatusRunning {
-					step.Status = domain.SagaStepStatusCompensated
-					step.FinishedAt = &now
-					step.Error = ""
-				}
-
-				if statemachine.CanTransition(candidate.Status, domain.SagaStatusCompensated) {
-					candidate.Status = domain.SagaStatusCompensated
-				}
-				return nil
-			}
-
-			if step.Status == domain.SagaStepStatusPending || step.Status == domain.SagaStepStatusRunning {
-				step.Status = domain.SagaStepStatusCompleted
-				step.FinishedAt = &now
-				step.Error = ""
-			}
-
-			if candidate.Status == domain.SagaStatusCreated && statemachine.CanTransition(candidate.Status, domain.SagaStatusRunning) {
-				candidate.Status = domain.SagaStatusRunning
-			}
-
-			if hasFailedStep(candidate.Steps) && statemachine.CanTransition(candidate.Status, domain.SagaStatusFailed) {
-				candidate.Status = domain.SagaStatusFailed
-				return nil
-			}
-
-			if allStepsCompleted(candidate.Steps) && statemachine.CanTransition(candidate.Status, domain.SagaStatusCompleted) {
-				candidate.Status = domain.SagaStatusCompleted
-			}
-
-			return nil
-		})
-		return err
+		return r.processClaimedStepLocked(lockCtx, claimed)
 	})
 }
 
-func normalizeWorkers(workers int) int {
-	if workers <= 0 {
-		return 1
+func (r *StepRunner) processClaimedStepLocked(ctx context.Context, claimed domain.ClaimedSagaStep) error {
+	saga, step, shouldDispatch, err := r.loadClaimedStepForDispatch(ctx, claimed)
+	if err != nil {
+		return err
+	}
+	if !shouldDispatch {
+		return nil
 	}
 
-	return workers
+	dispatchErr := r.dispatcher.Dispatch(ctx, saga, step)
+	updateErr := r.updateClaimedStepAfterDispatch(ctx, claimed, dispatchErr)
+	if updateErr != nil {
+		if dispatchErr != nil {
+			return errors.Join(updateErr, dispatchErr)
+		}
+		return updateErr
+	}
+	if dispatchErr != nil {
+		return dispatchErr
+	}
+
+	return nil
 }
 
-func normalizePollInterval(pollInterval time.Duration) time.Duration {
-	if pollInterval <= 0 {
-		return 25 * time.Millisecond
+func (r *StepRunner) loadClaimedStepForDispatch(ctx context.Context, claimed domain.ClaimedSagaStep) (domain.Saga, domain.SagaStep, bool, error) {
+	saga, err := r.store.Get(ctx, claimed.SagaID)
+	if err != nil {
+		return domain.Saga{}, domain.SagaStep{}, false, err
 	}
 
-	return pollInterval
+	if err := r.validateClaimedStepIndex(ctx, claimed, len(saga.Steps), "claimed saga step index out of bounds"); err != nil {
+		return domain.Saga{}, domain.SagaStep{}, false, err
+	}
+
+	step := saga.Steps[claimed.StepIndex]
+	dispatchMode, shouldDispatch := resolveClaimedStepDispatchMode(saga.Status, step.Status)
+	if !shouldDispatch {
+		return domain.Saga{}, domain.SagaStep{}, false, nil
+	}
+
+	if dispatchMode == stepDispatchModeCompensate {
+		step.Status = domain.SagaStepStatusCompensating
+	}
+
+	return saga, step, true, nil
 }
 
-func normalizeStaleAfter(staleAfter time.Duration) time.Duration {
-	if staleAfter <= 0 {
-		return 5 * time.Second
+func resolveClaimedStepDispatchMode(sagaStatus domain.SagaStatus, stepStatus domain.SagaStepStatus) (stepDispatchMode, bool) {
+	switch sagaStatus {
+	case domain.SagaStatusCanceling:
+		switch stepStatus {
+		case domain.SagaStepStatusRunning, domain.SagaStepStatusCompleted, domain.SagaStepStatusCompensating:
+			return stepDispatchModeCompensate, true
+		default:
+			return stepDispatchModeNone, false
+		}
+	case domain.SagaStatusCompensated, domain.SagaStatusFailed:
+		return stepDispatchModeNone, false
 	}
 
-	return staleAfter
+	if stepStatus == domain.SagaStepStatusPending || stepStatus == domain.SagaStepStatusRunning {
+		return stepDispatchModeExecute, true
+	}
+
+	return stepDispatchModeNone, false
+}
+
+func (r *StepRunner) updateClaimedStepAfterDispatch(ctx context.Context, claimed domain.ClaimedSagaStep, dispatchErr error) error {
+	_, err := r.store.Update(ctx, claimed.SagaID, func(candidate *domain.Saga) error {
+		if err := r.validateClaimedStepIndex(ctx, claimed, len(candidate.Steps), "claimed saga step index out of bounds during update"); err != nil {
+			return err
+		}
+
+		candidateStep := &candidate.Steps[claimed.StepIndex]
+		if candidate.Status == domain.SagaStatusCanceling {
+			if candidateStep.Status != domain.SagaStepStatusRunning &&
+				candidateStep.Status != domain.SagaStepStatusCompleted &&
+				candidateStep.Status != domain.SagaStepStatusCompensating {
+				return nil
+			}
+
+			applyClaimedStepCompensationResult(candidate, candidateStep, dispatchErr)
+			return nil
+		}
+
+		if candidateStep.Status != domain.SagaStepStatusPending &&
+			candidateStep.Status != domain.SagaStepStatusRunning {
+			return nil
+		}
+
+		applyClaimedStepDispatchResult(candidate, candidateStep, dispatchErr)
+		return nil
+	})
+
+	return err
+}
+
+func applyClaimedStepDispatchResult(candidate *domain.Saga, candidateStep *domain.SagaStep, dispatchErr error) {
+	now := time.Now().UTC()
+	if dispatchErr != nil {
+		candidateStep.Status = domain.SagaStepStatusFailed
+		candidateStep.FinishedAt = &now
+		candidateStep.Error = dispatchErr.Error()
+		if statemachine.CanTransition(candidate.Status, domain.SagaStatusFailed) {
+			candidate.Status = domain.SagaStatusFailed
+		}
+		return
+	}
+
+	candidateStep.Status = domain.SagaStepStatusCompleted
+	candidateStep.FinishedAt = &now
+	candidateStep.Error = ""
+
+	if candidate.Status == domain.SagaStatusCreated && statemachine.CanTransition(candidate.Status, domain.SagaStatusRunning) {
+		candidate.Status = domain.SagaStatusRunning
+	}
+
+	if hasFailedStep(candidate.Steps) && statemachine.CanTransition(candidate.Status, domain.SagaStatusFailed) {
+		candidate.Status = domain.SagaStatusFailed
+		return
+	}
+
+	if allStepsCompleted(candidate.Steps) && statemachine.CanTransition(candidate.Status, domain.SagaStatusCompleted) {
+		candidate.Status = domain.SagaStatusCompleted
+	}
+}
+
+func applyClaimedStepCompensationResult(candidate *domain.Saga, candidateStep *domain.SagaStep, dispatchErr error) {
+	now := time.Now().UTC()
+	if dispatchErr != nil {
+		candidateStep.Status = domain.SagaStepStatusFailed
+		candidateStep.FinishedAt = &now
+		candidateStep.Error = dispatchErr.Error()
+		if statemachine.CanTransition(candidate.Status, domain.SagaStatusFailed) {
+			candidate.Status = domain.SagaStatusFailed
+		}
+		return
+	}
+
+	candidateStep.Status = domain.SagaStepStatusCompensated
+	candidateStep.FinishedAt = &now
+	candidateStep.Error = ""
+
+	if hasFailedStep(candidate.Steps) {
+		if statemachine.CanTransition(candidate.Status, domain.SagaStatusFailed) {
+			candidate.Status = domain.SagaStatusFailed
+		}
+		return
+	}
+
+	if !hasPendingCompensationSteps(candidate.Steps) && statemachine.CanTransition(candidate.Status, domain.SagaStatusCompensated) {
+		candidate.Status = domain.SagaStatusCompensated
+	}
+}
+
+func (r *StepRunner) validateClaimedStepIndex(ctx context.Context, claimed domain.ClaimedSagaStep, stepsCount int, message string) error {
+	if claimed.StepIndex >= 0 && claimed.StepIndex < stepsCount {
+		return nil
+	}
+
+	err := fmt.Errorf("%w: saga_id=%s step_index=%d steps_count=%d", ErrClaimedStepIndexOutOfBounds, claimed.SagaID, claimed.StepIndex, stepsCount)
+	slog.WarnContext(ctx, message, "saga_id", claimed.SagaID, "step_index", claimed.StepIndex, "steps_count", stepsCount, "error", err)
+	return err
 }
 
 func allStepsCompleted(steps []domain.SagaStep) bool {

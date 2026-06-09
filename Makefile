@@ -1,10 +1,15 @@
-.PHONY: lint lint-code tests testsuite testsuite-deps run codegen tools clean-gen ci
+.DEFAULT_GOAL := help
+
+.PHONY: help lint lint-code fmt vet tests test-race testsuite testsuite-deps run build up down dev codegen tools clean-gen ci
 
 TOOLS_BIN := $(CURDIR)/.bin
+APP_BIN := $(TOOLS_BIN)/scipio
 GO_CACHE ?= $(CURDIR)/.cache/go-build
 GOLANGCI_LINT_CACHE_DIR ?= $(CURDIR)/.cache/golangci-lint
 TESTSUITE_VENV ?= $(CURDIR)/.testsuite-venv
 TESTSUITE_PYTHON := $(TESTSUITE_VENV)/bin/python
+TESTSUITE_DEPS_STAMP := $(TESTSUITE_VENV)/.deps.stamp
+COMPOSE ?= docker compose
 PROTOC_GEN_GO_VERSION ?= v1.36.11
 PROTOC_GEN_GO_GRPC_VERSION ?= v1.6.2
 OAPI_CODEGEN_VERSION ?= v2.7.0
@@ -21,23 +26,71 @@ OPENAPI_FILE := api/openapi/saga.yaml
 OPENAPI_CONFIG := api/openapi/oapi-codegen.yaml
 OPENAPI_OUT_DIR := gen/openapi
 
+help:
+	@printf "%s\n" \
+		"Available targets:" \
+		"  help           Show this help" \
+		"  up             Start PostgreSQL and Redis via docker compose" \
+		"  down           Stop docker compose services" \
+		"  dev            One-command local start (up + run)" \
+		"  run            Run scipio from source" \
+		"  build          Build binary into .bin/scipio" \
+		"  fmt            Run go fmt" \
+		"  vet            Run go vet" \
+		"  lint           Run golangci-lint" \
+		"  tests          Run go tests" \
+		"  test-race      Run go tests with race detector" \
+		"  testsuite      Run Python functional tests" \
+		"  codegen        Regenerate proto/openapi/sqlc artifacts"
+
+fmt:
+	mkdir -p $(GO_CACHE)
+	GOCACHE=$(GO_CACHE) go fmt ./...
+
+vet:
+	mkdir -p $(GO_CACHE)
+	GOCACHE=$(GO_CACHE) go vet ./...
+
 lint:
 	mkdir -p $(GO_CACHE) $(GOLANGCI_LINT_CACHE_DIR)
 	GOCACHE=$(GO_CACHE) GOLANGCI_LINT_CACHE=$(GOLANGCI_LINT_CACHE_DIR) golangci-lint run ./...
 
+lint-code: lint
+
 tests:
 	mkdir -p $(GO_CACHE)
-	GOCACHE=$(GO_CACHE) go test -count=1 -tags test_dep ./...
+	GOCACHE=$(GO_CACHE) go test -count=1 ./...
 
-testsuite-deps:
+test-race:
+	mkdir -p $(GO_CACHE)
+	GOCACHE=$(GO_CACHE) go test -count=1 -race ./...
+
+testsuite-deps: $(TESTSUITE_DEPS_STAMP)
+
+$(TESTSUITE_PYTHON):
 	python3 -m venv $(TESTSUITE_VENV)
+
+$(TESTSUITE_DEPS_STAMP): testsuite/requirements.txt | $(TESTSUITE_PYTHON)
 	$(TESTSUITE_PYTHON) -m pip install -r testsuite/requirements.txt
+	touch $(TESTSUITE_DEPS_STAMP)
 
 testsuite: testsuite-deps
 	$(TESTSUITE_PYTHON) -m pytest testsuite
 
 run:
 	go run ./cmd/scipio
+
+build:
+	mkdir -p $(TOOLS_BIN) $(GO_CACHE)
+	GOCACHE=$(GO_CACHE) go build -o $(APP_BIN) ./cmd/scipio
+
+up:
+	$(COMPOSE) up -d postgres redis
+
+down:
+	$(COMPOSE) down --remove-orphans
+
+dev: up run
 
 tools: $(PROTOC_GEN_GO) $(PROTOC_GEN_GO_GRPC) $(OAPI_CODEGEN) $(SQLC)
 
@@ -74,6 +127,6 @@ codegen: tools clean-gen
 	$(SQLC) generate
 
 clean-gen:
-	rm -f $(PROTO_OUT_DIR)/saga.pb.go $(PROTO_OUT_DIR)/saga_grpc.pb.go $(PROTO_OUT_DIR)/saga.pb $(OPENAPI_OUT_DIR)/saga.gen.go $(OPENAPI_OUT_DIR)/saga.openapi.yaml
+	rm -f $(PROTO_OUT_DIR)/*.pb.go $(PROTO_OUT_DIR)/*.pb $(OPENAPI_OUT_DIR)/*.gen.go $(OPENAPI_OUT_DIR)/*.openapi.yaml
 
 ci: lint tests testsuite
