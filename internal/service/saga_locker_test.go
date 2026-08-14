@@ -59,7 +59,7 @@ func (h *watchdogTestHandle) calls() int {
 	return h.extendCalls
 }
 
-func TestShouldRenewSagaLockWhenOperationTakesLongerThanHalfLockTTL(t *testing.T) {
+func Test_WithSagaLock_RenewLockWhenOperationTakesLongerThanHalfTTL(t *testing.T) {
 	t.Parallel()
 
 	handle := &watchdogTestHandle{closed: make(chan struct{})}
@@ -91,7 +91,7 @@ func TestShouldRenewSagaLockWhenOperationTakesLongerThanHalfLockTTL(t *testing.T
 	}
 }
 
-func TestShouldReturnRenewErrorWhenWatchdogCannotExtendLock(t *testing.T) {
+func Test_WithSagaLock_ReturnRenewErrorWhenWatchdogCannotExtendLock(t *testing.T) {
 	t.Parallel()
 
 	renewErr := errors.New("renew failed")
@@ -112,7 +112,7 @@ func TestShouldReturnRenewErrorWhenWatchdogCannotExtendLock(t *testing.T) {
 	}
 }
 
-func TestShouldReturnErrLockContendedWhenAcquireTimesOutWithoutRequestDeadline(t *testing.T) {
+func Test_WithSagaLock_ReturnErrLockContendedWhenAcquireTimesOutWithoutRequestDeadline(t *testing.T) {
 	t.Parallel()
 
 	locker := newSagaLocker(blockingAcquireLocker{}, 20*time.Millisecond)

@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldApplyDefaultsWhenEnvironmentVariablesAreAbsent(t *testing.T) {
+func Test_Load_ApplyDefaultsWhenEnvironmentVariablesAreAbsent(t *testing.T) {
 	resetConfigEnv(t)
 
 	cfg, err := Load()
@@ -25,7 +25,7 @@ func TestShouldApplyDefaultsWhenEnvironmentVariablesAreAbsent(t *testing.T) {
 	}, cfg)
 }
 
-func TestShouldParseConfiguredValuesWhenEnvironmentVariablesArePresent(t *testing.T) {
+func Test_Load_ParseConfiguredValuesWhenEnvironmentVariablesArePresent(t *testing.T) {
 	resetConfigEnv(t)
 
 	setEnv(t, "SCIPIO_GRPC_PORT", "19090")
@@ -53,7 +53,7 @@ func TestShouldParseConfiguredValuesWhenEnvironmentVariablesArePresent(t *testin
 	}, cfg)
 }
 
-func TestShouldReturnErrorWhenEnvironmentVariableValueIsInvalid(t *testing.T) {
+func Test_Load_ReturnErrorWhenEnvironmentVariableValueIsInvalid(t *testing.T) {
 	resetConfigEnv(t)
 
 	setEnv(t, "SCIPIO_STEP_WORKERS", "not-a-number")

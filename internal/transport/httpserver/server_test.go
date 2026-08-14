@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldReturn404WhenGetSagaReturnsNotFound(t *testing.T) {
+func Test_GetSaga_Return404WhenServiceReturnsNotFound(t *testing.T) {
 	t.Parallel()
 
 	srv := New(&stubSagaService{
@@ -29,7 +29,7 @@ func TestShouldReturn404WhenGetSagaReturnsNotFound(t *testing.T) {
 	require.Equal(t, service.ErrSagaNotFound.Error(), notFoundResponse.Error)
 }
 
-func TestShouldReturn400WhenListSagasReturnsInvalidPagination(t *testing.T) {
+func Test_ListSagas_Return400WhenServiceReturnsInvalidPagination(t *testing.T) {
 	t.Parallel()
 
 	srv := New(&stubSagaService{
@@ -46,7 +46,7 @@ func TestShouldReturn400WhenListSagasReturnsInvalidPagination(t *testing.T) {
 	require.Equal(t, service.ErrInvalidPagination.Error(), badRequestResponse.Error)
 }
 
-func TestShouldReturn409WhenCancelSagaReturnsLockContended(t *testing.T) {
+func Test_CancelSaga_Return409WhenServiceReturnsLockContended(t *testing.T) {
 	t.Parallel()
 
 	srv := New(&stubSagaService{
@@ -63,7 +63,7 @@ func TestShouldReturn409WhenCancelSagaReturnsLockContended(t *testing.T) {
 	require.Equal(t, service.ErrSagaLockContended.Error(), conflictResponse.Error)
 }
 
-func TestShouldReturn409WhenCancelSagaReturnsCancelNotAllowed(t *testing.T) {
+func Test_CancelSaga_Return409WhenServiceReturnsCancelNotAllowed(t *testing.T) {
 	t.Parallel()
 
 	srv := New(&stubSagaService{
@@ -80,7 +80,7 @@ func TestShouldReturn409WhenCancelSagaReturnsCancelNotAllowed(t *testing.T) {
 	require.Equal(t, service.ErrSagaCancelNotAllowed.Error(), conflictResponse.Error)
 }
 
-func TestShouldPassIdempotencyKeyWhenStartSagaRequestContainsIdempotencyKey(t *testing.T) {
+func Test_StartSaga_PassIdempotencyKeyWhenRequestContainsIdempotencyKey(t *testing.T) {
 	t.Parallel()
 
 	capturedKey := ""

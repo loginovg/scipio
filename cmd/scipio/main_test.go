@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldReturnEmbeddedSchemaSQLWhenRuntimeLoadsSchema(t *testing.T) {
+func Test_LoadEmbeddedSchemaSQL_ReturnEmbeddedSchemaSQL(t *testing.T) {
 	t.Parallel()
 
 	schemaSQL, err := loadEmbeddedSchemaSQL()
@@ -22,7 +22,7 @@ func TestShouldReturnEmbeddedSchemaSQLWhenRuntimeLoadsSchema(t *testing.T) {
 	require.Contains(t, schemaSQL, "CREATE TABLE IF NOT EXISTS sagas")
 }
 
-func TestShouldShutdownIngressBeforeRunnerWhenRuntimeStops(t *testing.T) {
+func Test_ShutdownRuntime_ShutdownIngressBeforeRunner(t *testing.T) {
 	t.Parallel()
 
 	order := make([]string, 0, 3)
@@ -62,7 +62,7 @@ func TestShouldShutdownIngressBeforeRunnerWhenRuntimeStops(t *testing.T) {
 	require.Equal(t, []string{"grpc", "http", "runner"}, order)
 }
 
-func TestShouldCancelRunnerWhenHTTPShutdownFails(t *testing.T) {
+func Test_ShutdownRuntime_CancelRunnerWhenHTTPShutdownFails(t *testing.T) {
 	t.Parallel()
 
 	runnerDone := make(chan struct{})
@@ -91,7 +91,7 @@ func TestShouldCancelRunnerWhenHTTPShutdownFails(t *testing.T) {
 	require.True(t, canceled)
 }
 
-func TestShouldConfigureHTTPServerTimeoutsWhenRuntimeBuildsHTTPServer(t *testing.T) {
+func Test_NewHTTPServer_ConfigureServerTimeouts(t *testing.T) {
 	t.Parallel()
 
 	handler := http.NewServeMux()
@@ -130,7 +130,7 @@ func (s *recordingHTTPShutdowner) Shutdown(ctx context.Context) error {
 	return s.onShutdown(ctx)
 }
 
-func TestShouldForceStopGRPCWhenGracefulStopExceedsTimeout(t *testing.T) {
+func Test_ShutdownRuntimeWithTimeouts_ForceStopGRPCWhenGracefulStopExceedsTimeout(t *testing.T) {
 	t.Parallel()
 
 	runnerDone := make(chan struct{})

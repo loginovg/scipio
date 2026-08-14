@@ -19,7 +19,7 @@ type claimNextStepStore interface {
 
 type claimNextStepStoreFactory func(t *testing.T) claimNextStepStore
 
-func TestShouldSatisfyClaimNextStepContractWhenUsingMemoryStore(t *testing.T) {
+func Test_MemoryClaimNextStep_SatisfyContract(t *testing.T) {
 	t.Parallel()
 
 	runClaimNextStepContractTests(t, func(_ *testing.T) claimNextStepStore {

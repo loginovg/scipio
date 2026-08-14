@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldAllowExpectedSagaTransitionsWhenTransitionIsValid(t *testing.T) {
+func Test_CanTransition_AllowExpectedSagaTransitions(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -37,7 +37,7 @@ func TestShouldAllowExpectedSagaTransitionsWhenTransitionIsValid(t *testing.T) {
 	}
 }
 
-func TestShouldRejectTransitionToCompensatedWhenSagaIsRunning(t *testing.T) {
+func Test_CanTransition_RejectTransitionFromRunningToCompensated(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -51,7 +51,7 @@ func TestShouldRejectTransitionToCompensatedWhenSagaIsRunning(t *testing.T) {
 	require.False(t, allowed)
 }
 
-func TestShouldRecognizeTerminalStatesWhenStatusIsFinal(t *testing.T) {
+func Test_IsTerminal_RecognizeFinalStatuses(t *testing.T) {
 	t.Parallel()
 
 	// given

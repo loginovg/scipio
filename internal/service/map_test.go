@@ -11,7 +11,7 @@ type startStepDTO struct {
 	grpcTarget string
 }
 
-func TestShouldMapStartSagaStepsWhenSourceItemsAreValues(t *testing.T) {
+func Test_MapStartSagaSteps_MapSourceItemsWhenTheyAreValues(t *testing.T) {
 	t.Parallel()
 
 	source := []startStepDTO{
@@ -32,7 +32,7 @@ func TestShouldMapStartSagaStepsWhenSourceItemsAreValues(t *testing.T) {
 	}, mapped)
 }
 
-func TestShouldMapStartSagaStepsWhenSourceItemsArePointers(t *testing.T) {
+func Test_MapStartSagaSteps_MapSourceItemsWhenTheyArePointers(t *testing.T) {
 	t.Parallel()
 
 	source := []*startStepDTO{

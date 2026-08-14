@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldSendStartSagaRequestWhenClientStartsSaga(t *testing.T) {
+func Test_ClientStartSaga_SendStartSagaRequest(t *testing.T) {
 	t.Parallel()
 
 	client, server := newTestClientAndServer(t)
@@ -47,7 +47,7 @@ func TestShouldSendStartSagaRequestWhenClientStartsSaga(t *testing.T) {
 	require.Equal(t, map[string]any{"amount": float64(42), "currency": "USD"}, parsedContext)
 }
 
-func TestShouldSendIdempotencyKeyWhenClientStartsSagaWithIdempotencyKey(t *testing.T) {
+func Test_ClientStartSagaWithIdempotencyKey_SendIdempotencyKey(t *testing.T) {
 	t.Parallel()
 
 	client, server := newTestClientAndServer(t)
@@ -69,7 +69,7 @@ func TestShouldSendIdempotencyKeyWhenClientStartsSagaWithIdempotencyKey(t *testi
 	require.Equal(t, "idempotency-key-1", request.GetIdempotencyKey())
 }
 
-func TestShouldSendGetSagaRequestWhenClientGetsSaga(t *testing.T) {
+func Test_ClientGetSaga_SendGetSagaRequest(t *testing.T) {
 	t.Parallel()
 
 	client, server := newTestClientAndServer(t)
@@ -86,7 +86,7 @@ func TestShouldSendGetSagaRequestWhenClientGetsSaga(t *testing.T) {
 	require.Equal(t, "get-saga-id", request.GetId())
 }
 
-func TestShouldSendCancelSagaRequestWhenClientCancelsSaga(t *testing.T) {
+func Test_ClientCancelSaga_SendCancelSagaRequest(t *testing.T) {
 	t.Parallel()
 
 	client, server := newTestClientAndServer(t)

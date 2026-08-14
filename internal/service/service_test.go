@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldReturnSagaIDWhenSagaStartsWithValidInput(t *testing.T) {
+func Test_StartSaga_ReturnSagaIDWithValidInput(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -39,7 +39,7 @@ func TestShouldReturnSagaIDWhenSagaStartsWithValidInput(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond)
 }
 
-func TestShouldCreatePendingStepWhenSagaStarts(t *testing.T) {
+func Test_StartSaga_CreatePendingStep(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -70,7 +70,7 @@ func TestShouldCreatePendingStepWhenSagaStarts(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond)
 }
 
-func TestShouldCreateConfiguredStepWhenSagaStartsWithSteps(t *testing.T) {
+func Test_StartSaga_CreateConfiguredStep(t *testing.T) {
 	t.Parallel()
 
 	svc := newTestService(t)
@@ -100,7 +100,7 @@ func TestShouldCreateConfiguredStepWhenSagaStartsWithSteps(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond)
 }
 
-func TestShouldReturnSameSagaIDWhenStartSagaRetriedWithSameIdempotencyKey(t *testing.T) {
+func Test_StartSagaWithIdempotencyKey_ReturnSameSagaIDWhenRetried(t *testing.T) {
 	t.Parallel()
 
 	svc := newTestService(t)
@@ -130,7 +130,7 @@ func TestShouldReturnSameSagaIDWhenStartSagaRetriedWithSameIdempotencyKey(t *tes
 	require.Len(t, sagas, 1)
 }
 
-func TestShouldReturnErrInvalidWorkflowWhenWorkflowIsBlank(t *testing.T) {
+func Test_StartSaga_ReturnErrInvalidWorkflowWhenWorkflowIsBlank(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -143,7 +143,7 @@ func TestShouldReturnErrInvalidWorkflowWhenWorkflowIsBlank(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidWorkflow)
 }
 
-func TestShouldReturnErrInvalidContextWhenContextIsInvalidJSON(t *testing.T) {
+func Test_StartSaga_ReturnErrInvalidContextWhenContextIsInvalidJSON(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -156,7 +156,7 @@ func TestShouldReturnErrInvalidContextWhenContextIsInvalidJSON(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidContext)
 }
 
-func TestShouldReturnErrInvalidContextWhenContextExceedsSizeLimit(t *testing.T) {
+func Test_StartSaga_ReturnErrInvalidContextWhenContextExceedsSizeLimit(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -170,7 +170,7 @@ func TestShouldReturnErrInvalidContextWhenContextExceedsSizeLimit(t *testing.T) 
 	require.ErrorIs(t, err, ErrInvalidContext)
 }
 
-func TestShouldReturnErrStepsRequiredWhenStepsAreMissing(t *testing.T) {
+func Test_StartSaga_ReturnErrStepsRequiredWhenStepsAreMissing(t *testing.T) {
 	t.Parallel()
 
 	svc := newTestService(t)
@@ -180,7 +180,7 @@ func TestShouldReturnErrStepsRequiredWhenStepsAreMissing(t *testing.T) {
 	require.ErrorIs(t, err, ErrStepsRequired)
 }
 
-func TestShouldReturnErrInvalidStepNameWhenStepNameIsBlank(t *testing.T) {
+func Test_StartSaga_ReturnErrInvalidStepNameWhenStepNameIsBlank(t *testing.T) {
 	t.Parallel()
 
 	svc := newTestService(t)
@@ -190,7 +190,7 @@ func TestShouldReturnErrInvalidStepNameWhenStepNameIsBlank(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidStepName)
 }
 
-func TestShouldReturnErrInvalidStepGRPCTargetWhenStepTargetIsBlank(t *testing.T) {
+func Test_StartSaga_ReturnErrInvalidStepGRPCTargetWhenStepTargetIsBlank(t *testing.T) {
 	t.Parallel()
 
 	svc := newTestService(t)
@@ -200,7 +200,7 @@ func TestShouldReturnErrInvalidStepGRPCTargetWhenStepTargetIsBlank(t *testing.T)
 	require.ErrorIs(t, err, ErrInvalidStepGRPCTarget)
 }
 
-func TestShouldReturnCompensatedSagaWhenCancelRequestedBeforeStepExecution(t *testing.T) {
+func Test_CancelSaga_ReturnCompensatedSagaBeforeStepExecution(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -227,7 +227,7 @@ func TestShouldReturnCompensatedSagaWhenCancelRequestedBeforeStepExecution(t *te
 	require.Equal(t, domain.SagaStepStatusCompensated, storedSaga.Steps[0].Status)
 }
 
-func TestShouldReturnCancelingSagaWhenCancelRequestedForRunningSaga(t *testing.T) {
+func Test_CancelSaga_ReturnCancelingSagaForRunningSaga(t *testing.T) {
 	t.Parallel()
 
 	memoryStore := store.NewMemory()
@@ -272,7 +272,7 @@ func TestShouldReturnCancelingSagaWhenCancelRequestedForRunningSaga(t *testing.T
 	require.NotNil(t, storedSaga.Steps[0].StartedAt)
 }
 
-func TestShouldReturnErrSagaCancelNotAllowedWhenCancelRequestedForFailedSaga(t *testing.T) {
+func Test_CancelSaga_ReturnErrSagaCancelNotAllowedForFailedSaga(t *testing.T) {
 	t.Parallel()
 
 	memoryStore := store.NewMemory()
@@ -312,7 +312,7 @@ func TestShouldReturnErrSagaCancelNotAllowedWhenCancelRequestedForFailedSaga(t *
 	require.Equal(t, "step failed", storedSaga.Steps[0].Error)
 }
 
-func TestShouldFilterSagasByStatusWhenStatusFilterProvided(t *testing.T) {
+func Test_ListSagas_FilterSagasByStatus(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -348,7 +348,7 @@ func TestShouldFilterSagasByStatusWhenStatusFilterProvided(t *testing.T) {
 	require.NotEqual(t, firstID, secondID)
 }
 
-func TestShouldReturnErrInvalidStatusFilterWhenFilterIsUnknown(t *testing.T) {
+func Test_ListSagas_ReturnErrInvalidStatusFilterWhenFilterIsUnknown(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -361,7 +361,7 @@ func TestShouldReturnErrInvalidStatusFilterWhenFilterIsUnknown(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidStatusFilter)
 }
 
-func TestShouldListSagasWhenStatusFilterContainsOnlyWhitespace(t *testing.T) {
+func Test_ListSagas_ReturnSagasWhenStatusFilterContainsOnlyWhitespace(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -381,7 +381,7 @@ func TestShouldListSagasWhenStatusFilterContainsOnlyWhitespace(t *testing.T) {
 	require.Len(t, sagas, 2)
 }
 
-func TestShouldReturnErrInvalidPaginationWhenPaginationIsNegative(t *testing.T) {
+func Test_ListSagas_ReturnErrInvalidPaginationWhenPaginationIsNegative(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -400,7 +400,7 @@ func TestShouldReturnErrInvalidPaginationWhenPaginationIsNegative(t *testing.T) 
 	require.ErrorIs(t, err, ErrInvalidPagination)
 }
 
-func TestShouldReturnErrNotFoundWhenSagaDoesNotExist(t *testing.T) {
+func Test_GetSaga_ReturnErrNotFoundWhenSagaDoesNotExist(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -413,7 +413,7 @@ func TestShouldReturnErrNotFoundWhenSagaDoesNotExist(t *testing.T) {
 	require.ErrorIs(t, err, ErrSagaNotFound)
 }
 
-func TestShouldReturnLockErrorWhenSagaLockAcquisitionFailsDuringCancel(t *testing.T) {
+func Test_CancelSaga_ReturnLockErrorWhenLockAcquisitionFails(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -431,7 +431,7 @@ func TestShouldReturnLockErrorWhenSagaLockAcquisitionFailsDuringCancel(t *testin
 	require.ErrorIs(t, cancelErr, lockErr)
 }
 
-func TestShouldReturnErrSagaLockContendedWhenSagaLockAcquisitionTimesOutDuringCancel(t *testing.T) {
+func Test_CancelSaga_ReturnErrSagaLockContendedWhenLockAcquisitionTimesOut(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -448,7 +448,7 @@ func TestShouldReturnErrSagaLockContendedWhenSagaLockAcquisitionTimesOutDuringCa
 	require.ErrorIs(t, cancelErr, ErrSagaLockContended)
 }
 
-func TestShouldReturnCancelUpdateErrorWhenCancelUpdateFailsDuringCancel(t *testing.T) {
+func Test_CancelSaga_ReturnUpdateErrorWhenUpdateFails(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -471,7 +471,7 @@ func TestShouldReturnCancelUpdateErrorWhenCancelUpdateFailsDuringCancel(t *testi
 	require.ErrorIs(t, cancelErr, cancelUpdateErr)
 }
 
-func TestShouldReturnErrStoreNotConfiguredWhenStoreIsNil(t *testing.T) {
+func Test_ServiceMethods_ReturnErrStoreNotConfiguredWhenStoreIsNil(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -503,7 +503,7 @@ func TestShouldReturnErrStoreNotConfiguredWhenStoreIsNil(t *testing.T) {
 	require.ErrorIs(t, listErr, ErrStoreNotConfigured)
 }
 
-func TestShouldReturnErrInvalidTTLWhenLockTTLIsNotPositiveInServiceConstructor(t *testing.T) {
+func Test_New_ReturnErrInvalidTTLWhenLockTTLIsNotPositive(t *testing.T) {
 	t.Parallel()
 
 	_, err := New(store.NewMemory(), lock.NewNoop(), 0)

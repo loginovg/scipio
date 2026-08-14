@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldProcessSubmittedTasksWhenPoolIsRunning(t *testing.T) {
+func Test_Pool_ProcessSubmittedTasksWhenRunning(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		// given
 		p := New[int, int](2, func(_ context.Context, task int) (int, error) {
@@ -41,7 +41,7 @@ func TestShouldProcessSubmittedTasksWhenPoolIsRunning(t *testing.T) {
 	})
 }
 
-func TestShouldReturnContextDeadlineExceededWhenShutdownDeadlineExpiresBeforeWorkersStop(t *testing.T) {
+func Test_PoolShutdown_ReturnContextDeadlineExceededWhenDeadlineExpiresBeforeWorkersStop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		block := make(chan struct{})
 		p := New[int, int](1, func(ctx context.Context, task int) (int, error) {
@@ -75,7 +75,7 @@ func TestShouldReturnContextDeadlineExceededWhenShutdownDeadlineExpiresBeforeWor
 	})
 }
 
-func TestShouldReturnContextCanceledWhenSubmitContextIsCanceled(t *testing.T) {
+func Test_PoolSubmit_ReturnContextCanceledWhenContextIsCanceled(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		// given
 		p := New[int, int](0, func(_ context.Context, task int) (int, error) {
@@ -94,7 +94,7 @@ func TestShouldReturnContextCanceledWhenSubmitContextIsCanceled(t *testing.T) {
 	})
 }
 
-func TestShouldReturnErrPoolClosedWhenTaskSubmittedAfterShutdown(t *testing.T) {
+func Test_PoolSubmit_ReturnErrPoolClosedAfterShutdown(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		// given
 		p := New[int, int](1, func(_ context.Context, task int) (int, error) {
@@ -111,7 +111,7 @@ func TestShouldReturnErrPoolClosedWhenTaskSubmittedAfterShutdown(t *testing.T) {
 	})
 }
 
-func TestShouldReturnErrPoolClosedWhenBlockedSubmitAndPoolShutsDown(t *testing.T) {
+func Test_PoolSubmit_ReturnErrPoolClosedWhenBlockedSubmitAndPoolShutsDown(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		// given
 		p := New[int, int](0, func(_ context.Context, task int) (int, error) {
@@ -135,7 +135,7 @@ func TestShouldReturnErrPoolClosedWhenBlockedSubmitAndPoolShutsDown(t *testing.T
 	})
 }
 
-func TestShouldSucceedWhenShutdownCalledConcurrentlyMultipleTimes(t *testing.T) {
+func Test_PoolShutdown_SucceedWhenCalledConcurrentlyMultipleTimes(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		// given
 		p := New[int, int](1, func(_ context.Context, task int) (int, error) {
@@ -166,7 +166,7 @@ func TestShouldSucceedWhenShutdownCalledConcurrentlyMultipleTimes(t *testing.T) 
 	})
 }
 
-func TestShouldReturnErrWorkerPanicWhenTaskHandlerPanics(t *testing.T) {
+func Test_Pool_ReturnErrWorkerPanicWhenTaskHandlerPanics(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		p := New[int, int](1, func(_ context.Context, task int) (int, error) {
 			if task == 1 {
