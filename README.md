@@ -15,7 +15,6 @@ Scipio is a lightweight Saga orchestrator with gRPC and HTTP interfaces.
 ## Local Run
 
 ```bash
-cp .env.dist .env
 make dev
 ```
 
