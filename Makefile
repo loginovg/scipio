@@ -47,23 +47,23 @@ fmt:
 	mkdir -p $(GO_CACHE)
 	GOCACHE=$(GO_CACHE) go fmt ./...
 
-vet:
+vet: codegen
 	mkdir -p $(GO_CACHE)
 	GOCACHE=$(GO_CACHE) go vet ./...
 
-lint:
+lint: codegen
 	mkdir -p $(GO_CACHE) $(GOLANGCI_LINT_CACHE_DIR)
 	GOCACHE=$(GO_CACHE) GOLANGCI_LINT_CACHE=$(GOLANGCI_LINT_CACHE_DIR) golangci-lint run ./...
 
 lint-code: lint
 
-tests:
+tests: codegen
 	mkdir -p $(GO_CACHE)
-	GOCACHE=$(GO_CACHE) go test -count=1 ./...
+	GOCACHE=$(GO_CACHE) go test -tags test_dep -count=1 ./...
 
-test-race:
+test-race: codegen
 	mkdir -p $(GO_CACHE)
-	GOCACHE=$(GO_CACHE) go test -count=1 -race ./...
+	GOCACHE=$(GO_CACHE) go test -tags test_dep -count=1 -race ./...
 
 testsuite-deps: $(TESTSUITE_DEPS_STAMP)
 
@@ -74,18 +74,18 @@ $(TESTSUITE_DEPS_STAMP): testsuite/requirements.txt | $(TESTSUITE_PYTHON)
 	$(TESTSUITE_PYTHON) -m pip install -r testsuite/requirements.txt
 	touch $(TESTSUITE_DEPS_STAMP)
 
-testsuite: testsuite-deps
+testsuite: codegen testsuite-deps
 	$(TESTSUITE_PYTHON) -m pytest testsuite
 
-run:
+run: codegen
 	go run ./cmd/scipio
 
-build:
+build: codegen
 	mkdir -p $(TOOLS_BIN) $(GO_CACHE)
 	GOCACHE=$(GO_CACHE) go build -o $(APP_BIN) ./cmd/scipio
 
 up:
-	$(COMPOSE) up -d postgres redis
+	$(COMPOSE) up -d --wait postgres redis
 
 down:
 	$(COMPOSE) down --remove-orphans

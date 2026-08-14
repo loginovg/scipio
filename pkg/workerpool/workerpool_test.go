@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldProcessSubmittedTasksWhenPoolIsRunning(t *testing.T) {
+func Test_Pool_ProcessSubmittedTasksWhenRunning(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		// given
 		p := New[int, int](2, func(_ context.Context, task int) (int, error) {
@@ -41,8 +41,9 @@ func TestShouldProcessSubmittedTasksWhenPoolIsRunning(t *testing.T) {
 	})
 }
 
-func TestShouldReturnContextDeadlineExceededWhenShutdownDeadlineExpiresBeforeWorkersStop(t *testing.T) {
+func Test_PoolShutdown_ReturnContextDeadlineExceededWhenDeadlineExpiresBeforeWorkersStop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		// given
 		block := make(chan struct{})
 		p := New[int, int](1, func(ctx context.Context, task int) (int, error) {
 			select {
@@ -54,10 +55,17 @@ func TestShouldReturnContextDeadlineExceededWhenShutdownDeadlineExpiresBeforeWor
 		})
 
 		require.NoError(t, p.Submit(context.Background(), 1))
+		defer func() {
+			close(block)
+			require.NoError(t, p.Shutdown(context.Background()))
+			for range p.Results() {
+			}
+		}()
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
 		defer cancel()
 
+		// when
 		errCh := make(chan error, 1)
 		go func() {
 			errCh <- p.Shutdown(ctx)
@@ -66,21 +74,21 @@ func TestShouldReturnContextDeadlineExceededWhenShutdownDeadlineExpiresBeforeWor
 		synctest.Wait()
 
 		err := <-errCh
-		require.ErrorIs(t, err, context.DeadlineExceeded)
 
-		close(block)
-		require.NoError(t, p.Shutdown(context.Background()))
-		for range p.Results() {
-		}
+		// then
+		require.ErrorIs(t, err, context.DeadlineExceeded)
 	})
 }
 
-func TestShouldReturnContextCanceledWhenSubmitContextIsCanceled(t *testing.T) {
+func Test_PoolSubmit_ReturnContextCanceledWhenContextIsCanceled(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		// given
 		p := New[int, int](0, func(_ context.Context, task int) (int, error) {
 			return task, nil
 		})
+		defer func() {
+			require.NoError(t, p.Shutdown(context.Background()))
+		}()
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -90,11 +98,10 @@ func TestShouldReturnContextCanceledWhenSubmitContextIsCanceled(t *testing.T) {
 
 		// then
 		require.ErrorIs(t, err, context.Canceled)
-		require.NoError(t, p.Shutdown(context.Background()))
 	})
 }
 
-func TestShouldReturnErrPoolClosedWhenTaskSubmittedAfterShutdown(t *testing.T) {
+func Test_PoolSubmit_ReturnErrPoolClosedAfterShutdown(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		// given
 		p := New[int, int](1, func(_ context.Context, task int) (int, error) {
@@ -111,7 +118,7 @@ func TestShouldReturnErrPoolClosedWhenTaskSubmittedAfterShutdown(t *testing.T) {
 	})
 }
 
-func TestShouldReturnErrPoolClosedWhenBlockedSubmitAndPoolShutsDown(t *testing.T) {
+func Test_PoolSubmit_ReturnErrPoolClosedWhenBlockedSubmitAndPoolShutsDown(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		// given
 		p := New[int, int](0, func(_ context.Context, task int) (int, error) {
@@ -135,7 +142,7 @@ func TestShouldReturnErrPoolClosedWhenBlockedSubmitAndPoolShutsDown(t *testing.T
 	})
 }
 
-func TestShouldSucceedWhenShutdownCalledConcurrentlyMultipleTimes(t *testing.T) {
+func Test_PoolShutdown_SucceedWhenCalledConcurrentlyMultipleTimes(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		// given
 		p := New[int, int](1, func(_ context.Context, task int) (int, error) {
@@ -166,8 +173,9 @@ func TestShouldSucceedWhenShutdownCalledConcurrentlyMultipleTimes(t *testing.T) 
 	})
 }
 
-func TestShouldReturnErrWorkerPanicWhenTaskHandlerPanics(t *testing.T) {
+func Test_Pool_ReturnErrWorkerPanicWhenTaskHandlerPanics(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		// given
 		p := New[int, int](1, func(_ context.Context, task int) (int, error) {
 			if task == 1 {
 				panic("boom")
@@ -176,6 +184,7 @@ func TestShouldReturnErrWorkerPanicWhenTaskHandlerPanics(t *testing.T) {
 			return task * 2, nil
 		})
 
+		// when
 		require.NoError(t, p.Submit(context.Background(), 1))
 		require.NoError(t, p.Submit(context.Background(), 2))
 
@@ -190,6 +199,8 @@ func TestShouldReturnErrWorkerPanicWhenTaskHandlerPanics(t *testing.T) {
 
 		require.NoError(t, p.Shutdown(context.Background()))
 		results := <-gotCh
+
+		// then
 		require.Len(t, results, 2)
 
 		panicResults := 0

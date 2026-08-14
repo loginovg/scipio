@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldParseContextMapWhenSagaContextIsValidJSONObject(t *testing.T) {
+func Test_ParseSagaContext_ReturnContextMapWhenSagaContextIsValidJSONObject(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -21,7 +21,7 @@ func TestShouldParseContextMapWhenSagaContextIsValidJSONObject(t *testing.T) {
 	require.Equal(t, map[string]any{"amount": float64(42), "currency": "USD"}, parsed)
 }
 
-func TestShouldReturnErrInvalidSagaContextWhenSagaContextIsEmpty(t *testing.T) {
+func Test_ParseSagaContext_ReturnErrInvalidSagaContextWhenSagaContextIsEmpty(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -35,7 +35,7 @@ func TestShouldReturnErrInvalidSagaContextWhenSagaContextIsEmpty(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidSagaContext)
 }
 
-func TestShouldReturnErrInvalidSagaContextWhenSagaContextIsNullLiteral(t *testing.T) {
+func Test_ParseSagaContext_ReturnErrInvalidSagaContextWhenSagaContextIsNullLiteral(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -49,7 +49,7 @@ func TestShouldReturnErrInvalidSagaContextWhenSagaContextIsNullLiteral(t *testin
 	require.ErrorIs(t, err, ErrInvalidSagaContext)
 }
 
-func TestShouldReturnErrInvalidSagaContextWhenSagaContextIsInvalidJSON(t *testing.T) {
+func Test_ParseSagaContext_ReturnErrInvalidSagaContextWhenSagaContextIsInvalidJSON(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -63,7 +63,7 @@ func TestShouldReturnErrInvalidSagaContextWhenSagaContextIsInvalidJSON(t *testin
 	require.ErrorIs(t, err, ErrInvalidSagaContext)
 }
 
-func TestShouldReturnErrInvalidSagaContextWhenSagaContextExceedsSizeLimit(t *testing.T) {
+func Test_ParseSagaContext_ReturnErrInvalidSagaContextWhenSagaContextExceedsSizeLimit(t *testing.T) {
 	t.Parallel()
 
 	// given

@@ -7,10 +7,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldApplyDefaultsWhenEnvironmentVariablesAreAbsent(t *testing.T) {
+func Test_Load_ApplyDefaultsWhenEnvironmentVariablesAreAbsent(t *testing.T) {
+	// given
 	resetConfigEnv(t)
 
+	// when
 	cfg, err := Load()
+
+	// then
 	require.NoError(t, err)
 	require.Equal(t, Runtime{
 		GRPCPort:                 defaultGRPCPort,
@@ -25,7 +29,8 @@ func TestShouldApplyDefaultsWhenEnvironmentVariablesAreAbsent(t *testing.T) {
 	}, cfg)
 }
 
-func TestShouldParseConfiguredValuesWhenEnvironmentVariablesArePresent(t *testing.T) {
+func Test_Load_ParseConfiguredValuesWhenEnvironmentVariablesArePresent(t *testing.T) {
+	// given
 	resetConfigEnv(t)
 
 	setEnv(t, "SCIPIO_GRPC_PORT", "19090")
@@ -38,7 +43,10 @@ func TestShouldParseConfiguredValuesWhenEnvironmentVariablesArePresent(t *testin
 	setEnv(t, "PG_CONN", "postgresql://example")
 	setEnv(t, "REDIS_CONN", "redis://example:6379/2")
 
+	// when
 	cfg, err := Load()
+
+	// then
 	require.NoError(t, err)
 	require.Equal(t, Runtime{
 		GRPCPort:                 19090,
@@ -53,12 +61,16 @@ func TestShouldParseConfiguredValuesWhenEnvironmentVariablesArePresent(t *testin
 	}, cfg)
 }
 
-func TestShouldReturnErrorWhenEnvironmentVariableValueIsInvalid(t *testing.T) {
+func Test_Load_ReturnErrorWhenEnvironmentVariableValueIsInvalid(t *testing.T) {
+	// given
 	resetConfigEnv(t)
 
 	setEnv(t, "SCIPIO_STEP_WORKERS", "not-a-number")
 
+	// when
 	_, err := Load()
+
+	// then
 	require.Error(t, err)
 	require.ErrorContains(t, err, "env SCIPIO_STEP_WORKERS")
 }

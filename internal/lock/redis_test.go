@@ -112,9 +112,10 @@ func (f *fakeMutex) snapshotCalls() (int, int, int) {
 	return f.lockCalls, f.extendCalls, f.unlockCalls
 }
 
-func TestShouldAcquireAndReleaseLockWhenMutexAllows(t *testing.T) {
+func Test_RedisAcquire_ReturnHandleWhenMutexAllows(t *testing.T) {
 	t.Parallel()
 
+	// given
 	mutex := newFakeMutex()
 	factory := &fakeMutexFactory{mutex: mutex}
 	locker := &Redis{
@@ -123,23 +124,50 @@ func TestShouldAcquireAndReleaseLockWhenMutexAllows(t *testing.T) {
 		retryInterval: 2 * time.Millisecond,
 	}
 
+	// when
 	handle, acquireErr := locker.Acquire(context.Background(), "saga-1", time.Second)
+
+	// then
 	require.NoError(t, acquireErr)
 	require.NotNil(t, handle)
-
-	require.NoError(t, handle.Release(context.Background()))
-	require.NoError(t, handle.Release(context.Background()))
 
 	lockCalls, extendCalls, unlockCalls := mutex.snapshotCalls()
 	require.Equal(t, 1, lockCalls)
 	require.Equal(t, 0, extendCalls)
-	require.Equal(t, 1, unlockCalls)
+	require.Equal(t, 0, unlockCalls)
 	require.Equal(t, []string{"test:saga-1"}, factory.namesSnapshot())
 }
 
-func TestShouldRetryUntilLockAcquiredWhenMutexReportsContention(t *testing.T) {
+func Test_RedisHandleRelease_ReleaseLockOnceWhenCalledMultipleTimes(t *testing.T) {
 	t.Parallel()
 
+	// given
+	mutex := newFakeMutex()
+	factory := &fakeMutexFactory{mutex: mutex}
+	locker := &Redis{
+		newMutex:      factory.NewMutex,
+		prefix:        "test:",
+		retryInterval: 2 * time.Millisecond,
+	}
+	handle, acquireErr := locker.Acquire(context.Background(), "saga-1", time.Second)
+	require.NoError(t, acquireErr)
+	require.NotNil(t, handle)
+
+	// when
+	firstReleaseErr := handle.Release(context.Background())
+	secondReleaseErr := handle.Release(context.Background())
+
+	// then
+	require.NoError(t, firstReleaseErr)
+	require.NoError(t, secondReleaseErr)
+	_, _, unlockCalls := mutex.snapshotCalls()
+	require.Equal(t, 1, unlockCalls)
+}
+
+func Test_RedisAcquire_RetryUntilLockIsAcquiredWhenMutexReportsContention(t *testing.T) {
+	t.Parallel()
+
+	// given
 	mutex := newFakeMutex()
 	mutex.lockResults = []error{
 		redsync.ErrFailed,
@@ -153,7 +181,10 @@ func TestShouldRetryUntilLockAcquiredWhenMutexReportsContention(t *testing.T) {
 		retryInterval: time.Millisecond,
 	}
 
+	// when
 	handle, acquireErr := locker.Acquire(context.Background(), "saga-1", time.Second)
+
+	// then
 	require.NoError(t, acquireErr)
 	require.NotNil(t, handle)
 
@@ -163,9 +194,10 @@ func TestShouldRetryUntilLockAcquiredWhenMutexReportsContention(t *testing.T) {
 	require.Equal(t, 0, unlockCalls)
 }
 
-func TestShouldReturnContextDeadlineExceededWhenLockCannotBeAcquiredBeforeTimeout(t *testing.T) {
+func Test_RedisAcquire_ReturnContextDeadlineExceededWhenLockCannotBeAcquiredBeforeTimeout(t *testing.T) {
 	t.Parallel()
 
+	// given
 	mutex := newFakeMutex()
 	mutex.defaultLockErr = redsync.ErrFailed
 	factory := &fakeMutexFactory{mutex: mutex}
@@ -178,15 +210,18 @@ func TestShouldReturnContextDeadlineExceededWhenLockCannotBeAcquiredBeforeTimeou
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Millisecond)
 	defer cancel()
 
+	// when
 	handle, acquireErr := locker.Acquire(ctx, "saga-1", time.Second)
 
+	// then
 	require.Nil(t, handle)
 	require.ErrorIs(t, acquireErr, context.DeadlineExceeded)
 }
 
-func TestShouldReturnAcquireErrorWhenMutexReturnsNonContentionError(t *testing.T) {
+func Test_RedisAcquire_ReturnErrorWhenMutexReturnsNonContentionError(t *testing.T) {
 	t.Parallel()
 
+	// given
 	expectedErr := errors.New("redis unavailable")
 	mutex := newFakeMutex()
 	mutex.defaultLockErr = expectedErr
@@ -197,7 +232,10 @@ func TestShouldReturnAcquireErrorWhenMutexReturnsNonContentionError(t *testing.T
 		retryInterval: time.Millisecond,
 	}
 
+	// when
 	handle, acquireErr := locker.Acquire(context.Background(), "saga-1", time.Second)
+
+	// then
 	require.Nil(t, handle)
 	require.ErrorIs(t, acquireErr, expectedErr)
 
@@ -207,9 +245,10 @@ func TestShouldReturnAcquireErrorWhenMutexReturnsNonContentionError(t *testing.T
 	require.Equal(t, 0, unlockCalls)
 }
 
-func TestShouldReturnErrInvalidTTLWhenLockTTLIsNotPositive(t *testing.T) {
+func Test_RedisAcquire_ReturnErrInvalidTTLWhenLockTTLIsNotPositive(t *testing.T) {
 	t.Parallel()
 
+	// given
 	mutex := newFakeMutex()
 	factory := &fakeMutexFactory{mutex: mutex}
 	locker := &Redis{
@@ -218,56 +257,80 @@ func TestShouldReturnErrInvalidTTLWhenLockTTLIsNotPositive(t *testing.T) {
 		retryInterval: time.Millisecond,
 	}
 
+	// when
 	handle, acquireErr := locker.Acquire(context.Background(), "saga-1", 0)
+
+	// then
 	require.Nil(t, handle)
 	require.ErrorIs(t, acquireErr, ErrInvalidTTL)
 }
 
-func TestShouldReturnErrInvalidRetryIntervalWhenRetryIntervalIsNotPositive(t *testing.T) {
+func Test_NewRedis_ReturnErrInvalidRetryIntervalWhenRetryIntervalIsNotPositive(t *testing.T) {
 	t.Parallel()
 
+	// given
 	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379"})
 	t.Cleanup(func() {
 		require.NoError(t, client.Close())
 	})
 
+	// when
 	locker, err := NewRedis(client, "test:", 0)
+
+	// then
 	require.Nil(t, locker)
 	require.ErrorIs(t, err, ErrInvalidRetryInterval)
 }
 
-func TestShouldReturnErrInvalidRetryIntervalWhenRetryIntervalFromURLIsNotPositive(t *testing.T) {
+func Test_NewRedisFromURL_ReturnErrInvalidRetryIntervalWhenRetryIntervalIsNotPositive(t *testing.T) {
 	t.Parallel()
 
-	locker, err := NewRedisFromURL("redis://127.0.0.1:6379/0", "test:", 0)
+	// given
+	redisURL := "redis://127.0.0.1:6379/0"
+
+	// when
+	locker, err := NewRedisFromURL(redisURL, "test:", 0)
+
+	// then
 	require.Nil(t, locker)
 	require.ErrorIs(t, err, ErrInvalidRetryInterval)
 }
 
-func TestShouldReturnErrInvalidRedisURLWhenURLIsBlank(t *testing.T) {
+func Test_NewRedisFromURL_ReturnErrInvalidRedisURLWhenURLIsBlank(t *testing.T) {
 	t.Parallel()
 
-	locker, err := NewRedisFromURL("   ", "test:", time.Millisecond)
+	// given
+	redisURL := "   "
+
+	// when
+	locker, err := NewRedisFromURL(redisURL, "test:", time.Millisecond)
+
+	// then
 	require.Nil(t, locker)
 	require.ErrorIs(t, err, ErrInvalidRedisURL)
 }
 
-func TestShouldReturnErrInvalidPrefixWhenPrefixIsBlank(t *testing.T) {
+func Test_NewRedis_ReturnErrInvalidPrefixWhenPrefixIsBlank(t *testing.T) {
 	t.Parallel()
 
+	// given
 	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379"})
 	t.Cleanup(func() {
 		require.NoError(t, client.Close())
 	})
 
+	// when
 	locker, err := NewRedis(client, "   ", time.Millisecond)
+
+	// then
 	require.Nil(t, locker)
 	require.ErrorIs(t, err, ErrInvalidPrefix)
 }
 
-func TestShouldReturnUnlockErrorWhenReleaseFails(t *testing.T) {
+func Test_RedisHandleRelease_ReturnUnlockErrorWhenReleaseFails(t *testing.T) {
 	t.Parallel()
 
+	// given
 	expectedErr := errors.New("unlock failed")
 	mutex := newFakeMutex()
 	mutex.unlockResults = []unlockResult{{ok: false, err: expectedErr}}
@@ -282,13 +345,17 @@ func TestShouldReturnUnlockErrorWhenReleaseFails(t *testing.T) {
 	require.NoError(t, acquireErr)
 	require.NotNil(t, handle)
 
+	// when
 	releaseErr := handle.Release(context.Background())
+
+	// then
 	require.ErrorIs(t, releaseErr, expectedErr)
 }
 
-func TestShouldIgnoreErrLockAlreadyExpiredWhenReleasingLock(t *testing.T) {
+func Test_RedisHandleRelease_IgnoreErrLockAlreadyExpired(t *testing.T) {
 	t.Parallel()
 
+	// given
 	mutex := newFakeMutex()
 	mutex.unlockResults = []unlockResult{{ok: false, err: redsync.ErrLockAlreadyExpired}}
 	factory := &fakeMutexFactory{mutex: mutex}
@@ -302,17 +369,21 @@ func TestShouldIgnoreErrLockAlreadyExpiredWhenReleasingLock(t *testing.T) {
 	require.NoError(t, acquireErr)
 	require.NotNil(t, handle)
 
-	require.NoError(t, handle.Release(context.Background()))
+	// when
+	releaseErr := handle.Release(context.Background())
 
+	// then
+	require.NoError(t, releaseErr)
 	lockCalls, extendCalls, unlockCalls := mutex.snapshotCalls()
 	require.Equal(t, 1, lockCalls)
 	require.Equal(t, 0, extendCalls)
 	require.Equal(t, 1, unlockCalls)
 }
 
-func TestShouldExtendLockWhenMutexAllows(t *testing.T) {
+func Test_RedisHandleExtend_ExtendLockWhenMutexAllows(t *testing.T) {
 	t.Parallel()
 
+	// given
 	mutex := newFakeMutex()
 	factory := &fakeMutexFactory{mutex: mutex}
 	locker := &Redis{
@@ -325,17 +396,21 @@ func TestShouldExtendLockWhenMutexAllows(t *testing.T) {
 	require.NoError(t, acquireErr)
 	require.NotNil(t, handle)
 
-	require.NoError(t, handle.Extend(context.Background()))
+	// when
+	extendErr := handle.Extend(context.Background())
 
+	// then
+	require.NoError(t, extendErr)
 	lockCalls, extendCalls, unlockCalls := mutex.snapshotCalls()
 	require.Equal(t, 1, lockCalls)
 	require.Equal(t, 1, extendCalls)
 	require.Equal(t, 0, unlockCalls)
 }
 
-func TestShouldReturnExtendErrorWhenMutexExtendFails(t *testing.T) {
+func Test_RedisHandleExtend_ReturnErrorWhenMutexExtendFails(t *testing.T) {
 	t.Parallel()
 
+	// given
 	expectedErr := errors.New("extend failed")
 	mutex := newFakeMutex()
 	mutex.extendResults = []unlockResult{{ok: false, err: expectedErr}}
@@ -350,13 +425,17 @@ func TestShouldReturnExtendErrorWhenMutexExtendFails(t *testing.T) {
 	require.NoError(t, acquireErr)
 	require.NotNil(t, handle)
 
+	// when
 	extendErr := handle.Extend(context.Background())
+
+	// then
 	require.ErrorIs(t, extendErr, expectedErr)
 }
 
-func TestShouldReturnErrExtendFailedWhenMutexExtendReturnsFalseWithoutError(t *testing.T) {
+func Test_RedisHandleExtend_ReturnErrExtendFailedWhenMutexReturnsFalseWithoutError(t *testing.T) {
 	t.Parallel()
 
+	// given
 	mutex := newFakeMutex()
 	mutex.extendResults = []unlockResult{{ok: false, err: nil}}
 	factory := &fakeMutexFactory{mutex: mutex}
@@ -370,6 +449,9 @@ func TestShouldReturnErrExtendFailedWhenMutexExtendReturnsFalseWithoutError(t *t
 	require.NoError(t, acquireErr)
 	require.NotNil(t, handle)
 
+	// when
 	extendErr := handle.Extend(context.Background())
+
+	// then
 	require.ErrorIs(t, extendErr, redsync.ErrExtendFailed)
 }

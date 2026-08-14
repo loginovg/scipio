@@ -19,12 +19,16 @@ type claimNextStepStore interface {
 
 type claimNextStepStoreFactory func(t *testing.T) claimNextStepStore
 
-func TestShouldSatisfyClaimNextStepContractWhenUsingMemoryStore(t *testing.T) {
+func Test_MemoryClaimNextStep_SatisfyContract(t *testing.T) {
 	t.Parallel()
 
-	runClaimNextStepContractTests(t, func(_ *testing.T) claimNextStepStore {
+	// given
+	newStore := func(_ *testing.T) claimNextStepStore {
 		return NewMemory()
-	})
+	}
+
+	// when / then
+	runClaimNextStepContractTests(t, newStore)
 }
 
 func runClaimNextStepContractTests(t *testing.T, newStore claimNextStepStoreFactory) {
@@ -33,9 +37,13 @@ func runClaimNextStepContractTests(t *testing.T, newStore claimNextStepStoreFact
 	t.Run("TestShouldReturnNoClaimWhenStoreHasNoSagas", func(t *testing.T) {
 		t.Parallel()
 
+		// given
 		store := newStore(t)
+
+		// when
 		claimed, found, err := store.ClaimNextStep(context.Background(), time.Second)
 
+		// then
 		require.NoError(t, err)
 		require.False(t, found)
 		require.Equal(t, domain.ClaimedSagaStep{}, claimed)
@@ -44,6 +52,7 @@ func runClaimNextStepContractTests(t *testing.T, newStore claimNextStepStoreFact
 	t.Run("TestShouldClaimPendingStepWhenSagaHasPendingStep", func(t *testing.T) {
 		t.Parallel()
 
+		// given
 		store := newStore(t)
 		sagaID := fmt.Sprintf("contract-pending-%d", time.Now().UnixNano())
 		now := time.Now().UTC()
@@ -64,8 +73,10 @@ func runClaimNextStepContractTests(t *testing.T, newStore claimNextStepStoreFact
 		})
 		require.NoError(t, err)
 
+		// when
 		claimed, found, err := store.ClaimNextStep(context.Background(), time.Second)
 
+		// then
 		require.NoError(t, err)
 		require.True(t, found)
 		require.Equal(t, sagaID, claimed.SagaID)
@@ -86,6 +97,7 @@ func runClaimNextStepContractTests(t *testing.T, newStore claimNextStepStoreFact
 	t.Run("TestShouldReclaimStaleRunningStepWhenStepBecameStale", func(t *testing.T) {
 		t.Parallel()
 
+		// given
 		store := newStore(t)
 		sagaID := fmt.Sprintf("contract-stale-%d", time.Now().UnixNano())
 		now := time.Now().UTC()
@@ -109,8 +121,10 @@ func runClaimNextStepContractTests(t *testing.T, newStore claimNextStepStoreFact
 		})
 		require.NoError(t, err)
 
+		// when
 		claimed, found, err := store.ClaimNextStep(context.Background(), time.Second)
 
+		// then
 		require.NoError(t, err)
 		require.True(t, found)
 		require.Equal(t, sagaID, claimed.SagaID)
@@ -128,6 +142,7 @@ func runClaimNextStepContractTests(t *testing.T, newStore claimNextStepStoreFact
 	t.Run("TestShouldClaimCompletedStepForCompensationWhenSagaIsCanceling", func(t *testing.T) {
 		t.Parallel()
 
+		// given
 		store := newStore(t)
 		sagaID := fmt.Sprintf("contract-canceling-completed-%d", time.Now().UnixNano())
 		now := time.Now().UTC()
@@ -151,8 +166,10 @@ func runClaimNextStepContractTests(t *testing.T, newStore claimNextStepStoreFact
 		})
 		require.NoError(t, err)
 
+		// when
 		claimed, found, err := store.ClaimNextStep(context.Background(), time.Second)
 
+		// then
 		require.NoError(t, err)
 		require.True(t, found)
 		require.Equal(t, sagaID, claimed.SagaID)
@@ -172,6 +189,7 @@ func runClaimNextStepContractTests(t *testing.T, newStore claimNextStepStoreFact
 	t.Run("TestShouldClaimLastCompletedStepFirstWhenSagaIsCanceling", func(t *testing.T) {
 		t.Parallel()
 
+		// given
 		store := newStore(t)
 		sagaID := fmt.Sprintf("contract-canceling-order-%d", time.Now().UnixNano())
 		now := time.Now().UTC()
@@ -203,8 +221,10 @@ func runClaimNextStepContractTests(t *testing.T, newStore claimNextStepStoreFact
 		})
 		require.NoError(t, err)
 
+		// when
 		claimed, found, err := store.ClaimNextStep(context.Background(), time.Second)
 
+		// then
 		require.NoError(t, err)
 		require.True(t, found)
 		require.Equal(t, sagaID, claimed.SagaID)
@@ -222,6 +242,7 @@ func runClaimNextStepContractTests(t *testing.T, newStore claimNextStepStoreFact
 	t.Run("TestShouldReclaimStaleCompensatingStepWhenCompensationBecameStale", func(t *testing.T) {
 		t.Parallel()
 
+		// given
 		store := newStore(t)
 		sagaID := fmt.Sprintf("contract-canceling-stale-%d", time.Now().UnixNano())
 		now := time.Now().UTC()
@@ -245,8 +266,10 @@ func runClaimNextStepContractTests(t *testing.T, newStore claimNextStepStoreFact
 		})
 		require.NoError(t, err)
 
+		// when
 		claimed, found, err := store.ClaimNextStep(context.Background(), time.Second)
 
+		// then
 		require.NoError(t, err)
 		require.True(t, found)
 		require.Equal(t, sagaID, claimed.SagaID)

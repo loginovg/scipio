@@ -12,19 +12,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldReturnEmbeddedSchemaSQLWhenRuntimeLoadsSchema(t *testing.T) {
+func Test_LoadEmbeddedSchemaSQL_ReturnEmbeddedSchemaSQL(t *testing.T) {
 	t.Parallel()
 
+	// given
+	expectedStatement := "CREATE TABLE IF NOT EXISTS sagas"
+
+	// when
 	schemaSQL, err := loadEmbeddedSchemaSQL()
 
+	// then
 	require.NoError(t, err)
 	require.NotEmpty(t, strings.TrimSpace(schemaSQL))
-	require.Contains(t, schemaSQL, "CREATE TABLE IF NOT EXISTS sagas")
+	require.Contains(t, schemaSQL, expectedStatement)
 }
 
-func TestShouldShutdownIngressBeforeRunnerWhenRuntimeStops(t *testing.T) {
+func Test_ShutdownRuntime_ShutdownIngressBeforeRunner(t *testing.T) {
 	t.Parallel()
 
+	// given
 	order := make([]string, 0, 3)
 	mu := sync.Mutex{}
 	runnerDone := make(chan struct{})
@@ -54,17 +60,20 @@ func TestShouldShutdownIngressBeforeRunnerWhenRuntimeStops(t *testing.T) {
 		close(runnerDone)
 	}
 
+	// when
 	shutdownRuntime(grpcSrv, httpSrv, runnerCancel, runnerDone)
 
+	// then
 	mu.Lock()
 	defer mu.Unlock()
 	require.True(t, canceled)
 	require.Equal(t, []string{"grpc", "http", "runner"}, order)
 }
 
-func TestShouldCancelRunnerWhenHTTPShutdownFails(t *testing.T) {
+func Test_ShutdownRuntime_CancelRunnerWhenHTTPShutdownFails(t *testing.T) {
 	t.Parallel()
 
+	// given
 	runnerDone := make(chan struct{})
 	canceled := false
 	mu := sync.Mutex{}
@@ -84,20 +93,25 @@ func TestShouldCancelRunnerWhenHTTPShutdownFails(t *testing.T) {
 		close(runnerDone)
 	}
 
+	// when
 	shutdownRuntime(grpcSrv, httpSrv, runnerCancel, runnerDone)
 
+	// then
 	mu.Lock()
 	defer mu.Unlock()
 	require.True(t, canceled)
 }
 
-func TestShouldConfigureHTTPServerTimeoutsWhenRuntimeBuildsHTTPServer(t *testing.T) {
+func Test_NewHTTPServer_ConfigureServerTimeouts(t *testing.T) {
 	t.Parallel()
 
+	// given
 	handler := http.NewServeMux()
 
+	// when
 	server := newHTTPServer(8080, handler)
 
+	// then
 	require.NotNil(t, server)
 	require.Equal(t, ":8080", server.Addr)
 	require.Equal(t, handler, server.Handler)
@@ -130,9 +144,10 @@ func (s *recordingHTTPShutdowner) Shutdown(ctx context.Context) error {
 	return s.onShutdown(ctx)
 }
 
-func TestShouldForceStopGRPCWhenGracefulStopExceedsTimeout(t *testing.T) {
+func Test_ShutdownRuntimeWithTimeouts_ForceStopGRPCWhenGracefulStopExceedsTimeout(t *testing.T) {
 	t.Parallel()
 
+	// given
 	runnerDone := make(chan struct{})
 	runnerCanceled := false
 	mu := sync.Mutex{}
@@ -164,8 +179,10 @@ func TestShouldForceStopGRPCWhenGracefulStopExceedsTimeout(t *testing.T) {
 		close(runnerDone)
 	}
 
+	// when
 	shutdownRuntimeWithTimeouts(grpcSrv, httpSrv, runnerCancel, runnerDone, time.Millisecond, time.Second, time.Second)
 
+	// then
 	select {
 	case <-stopCalled:
 	default:

@@ -16,7 +16,11 @@ import (
 func TestShouldSatisfyClaimNextStepContractWhenUsingPostgresStore(t *testing.T) {
 	t.Parallel()
 
-	runClaimNextStepContractTests(t, newPostgresClaimNextStepStoreForContract)
+	// given
+	newStore := newPostgresClaimNextStepStoreForContract
+
+	// when / then
+	runClaimNextStepContractTests(t, newStore)
 }
 
 func newPostgresClaimNextStepStoreForContract(t *testing.T) claimNextStepStore {

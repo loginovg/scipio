@@ -12,77 +12,90 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldReturn404WhenGetSagaReturnsNotFound(t *testing.T) {
+func Test_GetSaga_Return404WhenServiceReturnsNotFound(t *testing.T) {
 	t.Parallel()
 
+	// given
 	srv := New(&stubSagaService{
 		getSagaFn: func(context.Context, string) (domain.Saga, error) {
 			return domain.Saga{}, service.ErrSagaNotFound
 		},
 	})
 
+	// when
 	response, err := srv.GetSaga(context.Background(), openapi.GetSagaRequestObject{Id: "missing"})
 
+	// then
 	require.NoError(t, err)
 	notFoundResponse, ok := response.(openapi.GetSaga404JSONResponse)
 	require.True(t, ok)
 	require.Equal(t, service.ErrSagaNotFound.Error(), notFoundResponse.Error)
 }
 
-func TestShouldReturn400WhenListSagasReturnsInvalidPagination(t *testing.T) {
+func Test_ListSagas_Return400WhenServiceReturnsInvalidPagination(t *testing.T) {
 	t.Parallel()
 
+	// given
 	srv := New(&stubSagaService{
 		listSagasFn: func(context.Context, string, int, int) ([]domain.Saga, error) {
 			return nil, service.ErrInvalidPagination
 		},
 	})
 
+	// when
 	response, err := srv.ListSagas(context.Background(), openapi.ListSagasRequestObject{})
 
+	// then
 	require.NoError(t, err)
 	badRequestResponse, ok := response.(openapi.ListSagas400JSONResponse)
 	require.True(t, ok)
 	require.Equal(t, service.ErrInvalidPagination.Error(), badRequestResponse.Error)
 }
 
-func TestShouldReturn409WhenCancelSagaReturnsLockContended(t *testing.T) {
+func Test_CancelSaga_Return409WhenServiceReturnsLockContended(t *testing.T) {
 	t.Parallel()
 
+	// given
 	srv := New(&stubSagaService{
 		cancelSagaFn: func(context.Context, string) (domain.Saga, error) {
 			return domain.Saga{}, service.ErrSagaLockContended
 		},
 	})
 
+	// when
 	response, err := srv.CancelSaga(context.Background(), openapi.CancelSagaRequestObject{Id: "busy"})
 
+	// then
 	require.NoError(t, err)
 	conflictResponse, ok := response.(openapi.CancelSaga409JSONResponse)
 	require.True(t, ok)
 	require.Equal(t, service.ErrSagaLockContended.Error(), conflictResponse.Error)
 }
 
-func TestShouldReturn409WhenCancelSagaReturnsCancelNotAllowed(t *testing.T) {
+func Test_CancelSaga_Return409WhenServiceReturnsCancelNotAllowed(t *testing.T) {
 	t.Parallel()
 
+	// given
 	srv := New(&stubSagaService{
 		cancelSagaFn: func(context.Context, string) (domain.Saga, error) {
 			return domain.Saga{}, service.ErrSagaCancelNotAllowed
 		},
 	})
 
+	// when
 	response, err := srv.CancelSaga(context.Background(), openapi.CancelSagaRequestObject{Id: "failed"})
 
+	// then
 	require.NoError(t, err)
 	conflictResponse, ok := response.(openapi.CancelSaga409JSONResponse)
 	require.True(t, ok)
 	require.Equal(t, service.ErrSagaCancelNotAllowed.Error(), conflictResponse.Error)
 }
 
-func TestShouldPassIdempotencyKeyWhenStartSagaRequestContainsIdempotencyKey(t *testing.T) {
+func Test_StartSaga_PassIdempotencyKeyWhenRequestContainsIdempotencyKey(t *testing.T) {
 	t.Parallel()
 
+	// given
 	capturedKey := ""
 	capturedContext := []byte(nil)
 	srv := New(&stubSagaService{
@@ -103,8 +116,10 @@ func TestShouldPassIdempotencyKeyWhenStartSagaRequestContainsIdempotencyKey(t *t
 		},
 	}
 
+	// when
 	response, err := srv.StartSaga(context.Background(), request)
 
+	// then
 	require.NoError(t, err)
 	startedResponse, ok := response.(openapi.StartSaga202JSONResponse)
 	require.True(t, ok)

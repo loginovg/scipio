@@ -59,12 +59,14 @@ func (h *watchdogTestHandle) calls() int {
 	return h.extendCalls
 }
 
-func TestShouldRenewSagaLockWhenOperationTakesLongerThanHalfLockTTL(t *testing.T) {
+func Test_WithSagaLock_RenewLockWhenOperationTakesLongerThanHalfTTL(t *testing.T) {
 	t.Parallel()
 
+	// given
 	handle := &watchdogTestHandle{closed: make(chan struct{})}
 	locker := newSagaLocker(watchdogTestLocker{handle: handle}, 20*time.Millisecond)
 
+	// when
 	err := locker.withSagaLock(context.Background(), "saga-1", func(ctx context.Context) error {
 		deadline := time.After(200 * time.Millisecond)
 		for {
@@ -81,6 +83,8 @@ func TestShouldRenewSagaLockWhenOperationTakesLongerThanHalfLockTTL(t *testing.T
 			}
 		}
 	})
+
+	// then
 	require.NoError(t, err)
 	require.Greater(t, handle.calls(), 0)
 
@@ -91,17 +95,21 @@ func TestShouldRenewSagaLockWhenOperationTakesLongerThanHalfLockTTL(t *testing.T
 	}
 }
 
-func TestShouldReturnRenewErrorWhenWatchdogCannotExtendLock(t *testing.T) {
+func Test_WithSagaLock_ReturnRenewErrorWhenWatchdogCannotExtendLock(t *testing.T) {
 	t.Parallel()
 
+	// given
 	renewErr := errors.New("renew failed")
 	handle := &watchdogTestHandle{extendErr: renewErr, extendAt: 1, closed: make(chan struct{})}
 	locker := newSagaLocker(watchdogTestLocker{handle: handle}, 20*time.Millisecond)
 
+	// when
 	err := locker.withSagaLock(context.Background(), "saga-1", func(ctx context.Context) error {
 		<-ctx.Done()
 		return ctx.Err()
 	})
+
+	// then
 	require.Error(t, err)
 	require.ErrorIs(t, err, renewErr)
 
@@ -112,14 +120,17 @@ func TestShouldReturnRenewErrorWhenWatchdogCannotExtendLock(t *testing.T) {
 	}
 }
 
-func TestShouldReturnErrLockContendedWhenAcquireTimesOutWithoutRequestDeadline(t *testing.T) {
+func Test_WithSagaLock_ReturnErrLockContendedWhenAcquireTimesOutWithoutRequestDeadline(t *testing.T) {
 	t.Parallel()
 
+	// given
 	locker := newSagaLocker(blockingAcquireLocker{}, 20*time.Millisecond)
 
+	// when
 	err := locker.withSagaLock(context.Background(), "saga-1", func(context.Context) error {
 		return nil
 	})
 
+	// then
 	require.ErrorIs(t, err, lock.ErrLockContended)
 }

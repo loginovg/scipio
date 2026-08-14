@@ -18,6 +18,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: generate code
+        run: make codegen
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
@@ -30,17 +34,24 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: run unit tests
-        run: make tests
+      - name: install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: build and run unit tests
+        run: make build tests
 
   testsuite:
     name: testsuite
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
+      - name: install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: start dependencies
         run: |
           if [ -s docker-compose.yaml ]; then

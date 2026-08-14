@@ -18,19 +18,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldSendStartSagaRequestWhenClientStartsSaga(t *testing.T) {
+func Test_ClientStartSaga_SendStartSagaRequest(t *testing.T) {
 	t.Parallel()
 
+	// given
 	client, server := newTestClientAndServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
+	// when
 	sagaID, err := client.StartSaga(
 		ctx,
 		"order_flow",
 		map[string]any{"amount": 42, "currency": "USD"},
 		[]StartSagaStep{{Name: "charge", GRPCTarget: "billing:9000"}},
 	)
+
+	// then
 	require.NoError(t, err)
 	require.Equal(t, "started-saga-id", sagaID)
 
@@ -47,13 +51,15 @@ func TestShouldSendStartSagaRequestWhenClientStartsSaga(t *testing.T) {
 	require.Equal(t, map[string]any{"amount": float64(42), "currency": "USD"}, parsedContext)
 }
 
-func TestShouldSendIdempotencyKeyWhenClientStartsSagaWithIdempotencyKey(t *testing.T) {
+func Test_ClientStartSagaWithIdempotencyKey_SendIdempotencyKey(t *testing.T) {
 	t.Parallel()
 
+	// given
 	client, server := newTestClientAndServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
+	// when
 	sagaID, err := client.StartSagaWithIdempotencyKey(
 		ctx,
 		"order_flow",
@@ -61,6 +67,8 @@ func TestShouldSendIdempotencyKeyWhenClientStartsSagaWithIdempotencyKey(t *testi
 		map[string]any{"amount": 42},
 		[]StartSagaStep{{Name: "charge", GRPCTarget: "billing:9000"}},
 	)
+
+	// then
 	require.NoError(t, err)
 	require.Equal(t, "started-saga-id", sagaID)
 
@@ -69,14 +77,18 @@ func TestShouldSendIdempotencyKeyWhenClientStartsSagaWithIdempotencyKey(t *testi
 	require.Equal(t, "idempotency-key-1", request.GetIdempotencyKey())
 }
 
-func TestShouldSendGetSagaRequestWhenClientGetsSaga(t *testing.T) {
+func Test_ClientGetSaga_SendGetSagaRequest(t *testing.T) {
 	t.Parallel()
 
+	// given
 	client, server := newTestClientAndServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
+	// when
 	saga, err := client.GetSaga(ctx, "get-saga-id")
+
+	// then
 	require.NoError(t, err)
 	require.NotNil(t, saga)
 	require.Equal(t, "get-saga-id", saga.GetId())
@@ -86,14 +98,18 @@ func TestShouldSendGetSagaRequestWhenClientGetsSaga(t *testing.T) {
 	require.Equal(t, "get-saga-id", request.GetId())
 }
 
-func TestShouldSendCancelSagaRequestWhenClientCancelsSaga(t *testing.T) {
+func Test_ClientCancelSaga_SendCancelSagaRequest(t *testing.T) {
 	t.Parallel()
 
+	// given
 	client, server := newTestClientAndServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
+	// when
 	saga, err := client.CancelSaga(ctx, "cancel-saga-id")
+
+	// then
 	require.NoError(t, err)
 	require.NotNil(t, saga)
 	require.Equal(t, "cancel-saga-id", saga.GetId())

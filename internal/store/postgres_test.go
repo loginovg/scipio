@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldReturnContextMapWhenRawContextIsJSONObject(t *testing.T) {
+func Test_ParseContext_ReturnContextMapWhenRawContextIsJSONObject(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -29,7 +29,7 @@ func TestShouldReturnContextMapWhenRawContextIsJSONObject(t *testing.T) {
 	require.Equal(t, map[string]any{"amount": float64(42), "currency": "USD"}, parsed)
 }
 
-func TestShouldReturnErrInvalidSagaContextWhenRawContextIsNullLiteral(t *testing.T) {
+func Test_ParseContext_ReturnErrInvalidSagaContextWhenRawContextIsNullLiteral(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -43,7 +43,7 @@ func TestShouldReturnErrInvalidSagaContextWhenRawContextIsNullLiteral(t *testing
 	require.ErrorIs(t, err, ErrInvalidSagaContext)
 }
 
-func TestShouldReturnErrInvalidSagaContextWhenRawContextIsEmpty(t *testing.T) {
+func Test_ParseContext_ReturnErrInvalidSagaContextWhenRawContextIsEmpty(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -57,7 +57,7 @@ func TestShouldReturnErrInvalidSagaContextWhenRawContextIsEmpty(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidSagaContext)
 }
 
-func TestShouldReturnErrInvalidSagaContextWhenRawContextExceedsSizeLimit(t *testing.T) {
+func Test_ParseContext_ReturnErrInvalidSagaContextWhenRawContextExceedsSizeLimit(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -71,9 +71,10 @@ func TestShouldReturnErrInvalidSagaContextWhenRawContextExceedsSizeLimit(t *test
 	require.ErrorIs(t, err, ErrInvalidSagaContext)
 }
 
-func TestShouldMapStepRowsWhenStatusesAreSupported(t *testing.T) {
+func Test_MapStepRows_MapRowsWhenStatusesAreSupported(t *testing.T) {
 	t.Parallel()
 
+	// given
 	now := time.Now().UTC()
 	rows := []sqlc.GetSagaStepsRow{
 		{
@@ -86,8 +87,10 @@ func TestShouldMapStepRowsWhenStatusesAreSupported(t *testing.T) {
 		},
 	}
 
+	// when
 	steps, err := mapStepRows(rows)
 
+	// then
 	require.NoError(t, err)
 	require.Len(t, steps, 1)
 	require.Equal(t, rows[0].Name, steps[0].Name)
@@ -98,9 +101,10 @@ func TestShouldMapStepRowsWhenStatusesAreSupported(t *testing.T) {
 	require.Equal(t, "boom", steps[0].Error)
 }
 
-func TestShouldMapStepRowsForUpdateWhenStatusesAreSupported(t *testing.T) {
+func Test_MapStepRowsForUpdate_MapRowsWhenStatusesAreSupported(t *testing.T) {
 	t.Parallel()
 
+	// given
 	now := time.Now().UTC()
 	rows := []sqlc.GetSagaStepsForUpdateRow{
 		{
@@ -112,8 +116,10 @@ func TestShouldMapStepRowsForUpdateWhenStatusesAreSupported(t *testing.T) {
 		},
 	}
 
+	// when
 	steps, err := mapStepRowsForUpdate(rows)
 
+	// then
 	require.NoError(t, err)
 	require.Len(t, steps, 1)
 	require.Equal(t, rows[0].Name, steps[0].Name)
@@ -123,9 +129,10 @@ func TestShouldMapStepRowsForUpdateWhenStatusesAreSupported(t *testing.T) {
 	require.Equal(t, now, steps[0].FinishedAt.UTC())
 }
 
-func TestShouldReturnErrorWhenStepRowsContainUnsupportedStatus(t *testing.T) {
+func Test_MapStepRows_ReturnErrorWhenRowsContainUnsupportedStatus(t *testing.T) {
 	t.Parallel()
 
+	// given
 	rows := []sqlc.GetSagaStepsRow{
 		{
 			Name:       "charge",
@@ -134,15 +141,18 @@ func TestShouldReturnErrorWhenStepRowsContainUnsupportedStatus(t *testing.T) {
 		},
 	}
 
+	// when
 	steps, err := mapStepRows(rows)
 
+	// then
 	require.Nil(t, steps)
 	require.Error(t, err)
 }
 
-func TestShouldReturnErrorWhenStepRowsForUpdateContainUnsupportedStatus(t *testing.T) {
+func Test_MapStepRowsForUpdate_ReturnErrorWhenRowsContainUnsupportedStatus(t *testing.T) {
 	t.Parallel()
 
+	// given
 	rows := []sqlc.GetSagaStepsForUpdateRow{
 		{
 			Name:       "reserve",
@@ -151,13 +161,15 @@ func TestShouldReturnErrorWhenStepRowsForUpdateContainUnsupportedStatus(t *testi
 		},
 	}
 
+	// when
 	steps, err := mapStepRowsForUpdate(rows)
 
+	// then
 	require.Nil(t, steps)
 	require.Error(t, err)
 }
 
-func TestShouldUpsertEachStepAndDeleteTailWhenReplacingSteps(t *testing.T) {
+func Test_ReplaceSteps_UpsertEachStepAndDeleteTail(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -193,7 +205,7 @@ func TestShouldUpsertEachStepAndDeleteTailWhenReplacingSteps(t *testing.T) {
 	require.Equal(t, int32(2), writer.deletedFromIndex.StepIndex)
 }
 
-func TestShouldReturnUpsertErrorWhenUpsertSagaStepFailsWhileReplacingSteps(t *testing.T) {
+func Test_ReplaceSteps_ReturnUpsertErrorWhenUpsertSagaStepFails(t *testing.T) {
 	t.Parallel()
 
 	// given
@@ -217,7 +229,7 @@ func TestShouldReturnUpsertErrorWhenUpsertSagaStepFailsWhileReplacingSteps(t *te
 	require.Equal(t, sqlc.DeleteSagaStepsFromIndexParams{}, writer.deletedFromIndex)
 }
 
-func TestShouldReturnDeleteErrorWhenDeleteSagaStepsFromIndexFailsWhileReplacingSteps(t *testing.T) {
+func Test_ReplaceSteps_ReturnDeleteErrorWhenDeleteSagaStepsFromIndexFails(t *testing.T) {
 	t.Parallel()
 
 	// given

@@ -6,21 +6,29 @@ import pytest
 
 
 def test_should_return_not_found_when_grpc_get_is_requested_for_missing_saga(grpc_targets, get_saga_grpc):
+    # given
     first_target, _ = grpc_targets
+    saga_id = uuid.uuid4().hex
 
+    # when
     with pytest.raises(grpc.RpcError) as err:
-        get_saga_grpc(first_target, uuid.uuid4().hex)
+        get_saga_grpc(first_target, saga_id)
 
+    # then
     assert err.value.code() == grpc.StatusCode.NOT_FOUND
     assert err.value.details() == "saga not found"
 
 
 def test_should_return_not_found_when_grpc_cancel_is_requested_for_missing_saga(grpc_targets, cancel_saga_grpc):
+    # given
     first_target, _ = grpc_targets
+    saga_id = uuid.uuid4().hex
 
+    # when
     with pytest.raises(grpc.RpcError) as err:
-        cancel_saga_grpc(first_target, uuid.uuid4().hex)
+        cancel_saga_grpc(first_target, saga_id)
 
+    # then
     assert err.value.code() == grpc.StatusCode.NOT_FOUND
     assert err.value.details() == "saga not found"
 
@@ -119,7 +127,10 @@ def test_should_fail_saga_when_grpc_step_target_is_unreachable(
     start_saga_grpc,
     wait_for_status_grpc,
 ):
+    # given
     first_target, _ = grpc_targets
+
+    # when
     saga_id = start_saga_grpc(
         first_target,
         "grpc_failed_step_flow",
@@ -131,6 +142,7 @@ def test_should_fail_saga_when_grpc_step_target_is_unreachable(
     saga_status_name = saga.DESCRIPTOR.fields_by_name["status"].enum_type.values_by_number[saga.status].name
     step_status_name = saga.steps[0].DESCRIPTOR.fields_by_name["status"].enum_type.values_by_number[saga.steps[0].status].name
 
+    # then
     assert saga.id == saga_id
     assert saga_status_name == "SAGA_STATUS_FAILED"
     assert len(saga.steps) == 1

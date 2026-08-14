@@ -14,65 +14,104 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestShouldReturnNotFoundStatusWhenMappingServiceNotFoundError(t *testing.T) {
+func Test_MapError_ReturnNotFoundStatusForServiceNotFoundError(t *testing.T) {
 	t.Parallel()
 
-	err := mapError(service.ErrSagaNotFound)
+	// given
+	serviceErr := service.ErrSagaNotFound
 
+	// when
+	err := mapError(serviceErr)
+
+	// then
 	grpcStatus, ok := status.FromError(err)
 	require.True(t, ok)
 	require.Equal(t, codes.NotFound, grpcStatus.Code())
 }
 
-func TestShouldReturnInvalidArgumentStatusWhenMappingServiceValidationError(t *testing.T) {
+func Test_MapError_ReturnInvalidArgumentStatusForServiceValidationError(t *testing.T) {
 	t.Parallel()
 
-	err := mapError(service.ErrInvalidWorkflow)
+	// given
+	serviceErr := service.ErrInvalidWorkflow
 
+	// when
+	err := mapError(serviceErr)
+
+	// then
 	grpcStatus, ok := status.FromError(err)
 	require.True(t, ok)
 	require.Equal(t, codes.InvalidArgument, grpcStatus.Code())
 }
 
-func TestShouldReturnAbortedStatusWhenMappingSagaLockContendedError(t *testing.T) {
+func Test_MapError_ReturnAbortedStatusForSagaLockContendedError(t *testing.T) {
 	t.Parallel()
 
-	err := mapError(service.ErrSagaLockContended)
+	// given
+	serviceErr := service.ErrSagaLockContended
 
+	// when
+	err := mapError(serviceErr)
+
+	// then
 	grpcStatus, ok := status.FromError(err)
 	require.True(t, ok)
 	require.Equal(t, codes.Aborted, grpcStatus.Code())
 }
 
-func TestShouldReturnFailedPreconditionStatusWhenMappingSagaCancelNotAllowedError(t *testing.T) {
+func Test_MapError_ReturnFailedPreconditionStatusForSagaCancelNotAllowedError(t *testing.T) {
 	t.Parallel()
 
-	err := mapError(service.ErrSagaCancelNotAllowed)
+	// given
+	serviceErr := service.ErrSagaCancelNotAllowed
 
+	// when
+	err := mapError(serviceErr)
+
+	// then
 	grpcStatus, ok := status.FromError(err)
 	require.True(t, ok)
 	require.Equal(t, codes.FailedPrecondition, grpcStatus.Code())
 }
 
-func TestShouldReturnInternalStatusWithGenericMessageWhenMappingUnexpectedError(t *testing.T) {
+func Test_MapError_ReturnInternalStatusWithGenericMessageForUnexpectedError(t *testing.T) {
 	t.Parallel()
 
-	err := mapError(errors.New("duplicate key value violates unique constraint"))
+	// given
+	serviceErr := errors.New("duplicate key value violates unique constraint")
 
+	// when
+	err := mapError(serviceErr)
+
+	// then
 	grpcStatus, ok := status.FromError(err)
 	require.True(t, ok)
 	require.Equal(t, codes.Internal, grpcStatus.Code())
 	require.Equal(t, "internal error", grpcStatus.Message())
 }
 
-func TestShouldReturnUnspecifiedWhenMappingUnknownSagaStatus(t *testing.T) {
+func Test_MapSagaStatus_ReturnUnspecifiedForUnknownSagaStatus(t *testing.T) {
 	t.Parallel()
 
-	require.Equal(t, sagav1.SagaStatus_SAGA_STATUS_UNSPECIFIED, mapSagaStatus(domain.SagaStatus("UNKNOWN_STATUS")))
+	// given
+	unknownStatus := domain.SagaStatus("UNKNOWN_STATUS")
+
+	// when
+	mapped := mapSagaStatus(unknownStatus)
+
+	// then
+	require.Equal(t, sagav1.SagaStatus_SAGA_STATUS_UNSPECIFIED, mapped)
 }
 
-func TestShouldReturnUnspecifiedWhenMappingUnknownSagaStepStatus(t *testing.T) {
+func Test_MapStepStatus_ReturnUnspecifiedForUnknownSagaStepStatus(t *testing.T) {
 	t.Parallel()
 
-	require.Equal(t, sagav1.SagaStepStatus_SAGA_STEP_STATUS_UNSPECIFIED, mapStepStatus(domain.SagaStepStatus("UNKNOWN_STATUS")))
+	// given
+	unknownStatus := domain.SagaStepStatus("UNKNOWN_STATUS")
+
+	// when
+	mapped := mapStepStatus(unknownStatus)
+
+	// then
+	require.Equal(t, sagav1.SagaStepStatus_SAGA_STEP_STATUS_UNSPECIFIED, mapped)
 }

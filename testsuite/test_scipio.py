@@ -3,19 +3,27 @@ import uuid
 
 
 def test_should_return_not_found_when_http_get_requested_for_missing_saga(scipio_cluster):
+    # given
     session, first_base_url, _, _ = scipio_cluster
+    saga_id = uuid.uuid4().hex
 
-    response = session.get(f"{first_base_url}/sagas/{uuid.uuid4().hex}", timeout=3)
+    # when
+    response = session.get(f"{first_base_url}/sagas/{saga_id}", timeout=3)
 
+    # then
     assert response.status_code == 404
     assert response.json()["error"] == "saga not found"
 
 
 def test_should_return_not_found_when_http_cancel_requested_for_missing_saga(scipio_cluster, cancel_saga):
+    # given
     session, first_base_url, _, _ = scipio_cluster
+    saga_id = uuid.uuid4().hex
 
-    response = cancel_saga(session, first_base_url, uuid.uuid4().hex)
+    # when
+    response = cancel_saga(session, first_base_url, saga_id)
 
+    # then
     assert response.status_code == 404
     assert response.json()["error"] == "saga not found"
 
@@ -70,11 +78,11 @@ def test_should_filter_sagas_when_status_query_is_provided(scipio_cluster, start
     second_saga_id = start_saga(session, first_base_url, "filter_flow", {"kind": "second"})
     wait_for_status(session, first_base_url, first_saga_id, "COMPLETED")
     wait_for_status(session, first_base_url, second_saga_id, "COMPLETED")
-
-    # when
     cancel_response = cancel_saga(session, first_base_url, second_saga_id)
     assert cancel_response.status_code == 202
     wait_for_status(session, first_base_url, second_saga_id, "COMPENSATED")
+
+    # when
     response = session.get(f"{first_base_url}/sagas", params={"status": "COMPENSATED"}, timeout=3)
 
     # then
@@ -105,10 +113,12 @@ def test_should_return_same_saga_id_when_start_requested_with_same_idempotency_k
     start_saga,
     wait_for_status,
 ):
+    # given
     session, first_base_url, second_base_url, _ = scipio_cluster
     idempotency_key = uuid.uuid4().hex
     saga_context = {"source": "testsuite", "value": 42}
 
+    # when
     first_saga_id = start_saga(
         session,
         first_base_url,
@@ -125,6 +135,7 @@ def test_should_return_same_saga_id_when_start_requested_with_same_idempotency_k
     )
     saga = wait_for_status(session, first_base_url, first_saga_id, "COMPLETED")
 
+    # then
     assert first_saga_id == second_saga_id
     assert saga["id"] == first_saga_id
     assert saga["workflow"] == "idempotency_flow"
@@ -281,7 +292,10 @@ def test_should_mark_saga_and_step_as_failed_when_step_target_is_unreachable(
     wait_for_status,
     db_connection,
 ):
+    # given
     session, first_base_url, _, _ = scipio_cluster
+
+    # when
     response = session.post(
         f"{first_base_url}/sagas",
         json={
@@ -291,21 +305,21 @@ def test_should_mark_saga_and_step_as_failed_when_step_target_is_unreachable(
         },
         timeout=3,
     )
-    assert response.status_code == 202
     saga_id = response.json()["id"]
 
     saga = wait_for_status(session, first_base_url, saga_id, "FAILED")
-    assert saga["status"] == "FAILED"
-    assert len(saga["steps"]) == 1
-    assert saga["steps"][0]["status"] == "FAILED"
-    assert saga["steps"][0]["error"] is not None
-
     db_connection.execute(
         "SELECT status, error FROM saga_steps WHERE saga_id = %s AND step_index = 0",
         (saga_id,),
     )
     row = db_connection.fetchone()
 
+    # then
+    assert response.status_code == 202
+    assert saga["status"] == "FAILED"
+    assert len(saga["steps"]) == 1
+    assert saga["steps"][0]["status"] == "FAILED"
+    assert saga["steps"][0]["error"] is not None
     assert row is not None
     assert row["status"] == "FAILED"
     assert row["error"] is not None
