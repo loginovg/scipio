@@ -74,6 +74,7 @@ func Test_ParseContext_ReturnErrInvalidSagaContextWhenRawContextExceedsSizeLimit
 func Test_MapStepRows_MapRowsWhenStatusesAreSupported(t *testing.T) {
 	t.Parallel()
 
+	// given
 	now := time.Now().UTC()
 	rows := []sqlc.GetSagaStepsRow{
 		{
@@ -86,8 +87,10 @@ func Test_MapStepRows_MapRowsWhenStatusesAreSupported(t *testing.T) {
 		},
 	}
 
+	// when
 	steps, err := mapStepRows(rows)
 
+	// then
 	require.NoError(t, err)
 	require.Len(t, steps, 1)
 	require.Equal(t, rows[0].Name, steps[0].Name)
@@ -101,6 +104,7 @@ func Test_MapStepRows_MapRowsWhenStatusesAreSupported(t *testing.T) {
 func Test_MapStepRowsForUpdate_MapRowsWhenStatusesAreSupported(t *testing.T) {
 	t.Parallel()
 
+	// given
 	now := time.Now().UTC()
 	rows := []sqlc.GetSagaStepsForUpdateRow{
 		{
@@ -112,8 +116,10 @@ func Test_MapStepRowsForUpdate_MapRowsWhenStatusesAreSupported(t *testing.T) {
 		},
 	}
 
+	// when
 	steps, err := mapStepRowsForUpdate(rows)
 
+	// then
 	require.NoError(t, err)
 	require.Len(t, steps, 1)
 	require.Equal(t, rows[0].Name, steps[0].Name)
@@ -126,6 +132,7 @@ func Test_MapStepRowsForUpdate_MapRowsWhenStatusesAreSupported(t *testing.T) {
 func Test_MapStepRows_ReturnErrorWhenRowsContainUnsupportedStatus(t *testing.T) {
 	t.Parallel()
 
+	// given
 	rows := []sqlc.GetSagaStepsRow{
 		{
 			Name:       "charge",
@@ -134,8 +141,10 @@ func Test_MapStepRows_ReturnErrorWhenRowsContainUnsupportedStatus(t *testing.T) 
 		},
 	}
 
+	// when
 	steps, err := mapStepRows(rows)
 
+	// then
 	require.Nil(t, steps)
 	require.Error(t, err)
 }
@@ -143,6 +152,7 @@ func Test_MapStepRows_ReturnErrorWhenRowsContainUnsupportedStatus(t *testing.T) 
 func Test_MapStepRowsForUpdate_ReturnErrorWhenRowsContainUnsupportedStatus(t *testing.T) {
 	t.Parallel()
 
+	// given
 	rows := []sqlc.GetSagaStepsForUpdateRow{
 		{
 			Name:       "reserve",
@@ -151,8 +161,10 @@ func Test_MapStepRowsForUpdate_ReturnErrorWhenRowsContainUnsupportedStatus(t *te
 		},
 	}
 
+	// when
 	steps, err := mapStepRowsForUpdate(rows)
 
+	// then
 	require.Nil(t, steps)
 	require.Error(t, err)
 }

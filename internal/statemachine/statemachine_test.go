@@ -23,13 +23,18 @@ func Test_CanTransition_AllowExpectedSagaTransitions(t *testing.T) {
 		{name: "canceling_to_compensated", from: domain.SagaStatusCanceling, to: domain.SagaStatusCompensated},
 	}
 
+	// when / then
 	for _, testCase := range testCases {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
+			// given
+			from := testCase.from
+			to := testCase.to
+
 			// when
-			allowed := CanTransition(testCase.from, testCase.to)
+			allowed := CanTransition(from, to)
 
 			// then
 			require.True(t, allowed)
